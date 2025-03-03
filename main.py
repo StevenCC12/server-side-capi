@@ -21,8 +21,8 @@ CAPI_URL = f"https://graph.facebook.com/v22.0/{FB_PIXEL_ID}/events?access_token=
 # Other variables
 fallback_URL = "https://challenge.carlhelgesson.com/5-dagars-challenge"
 landing_page_domain = "https://challenge.carlhelgesson.com"
-cloudflare_pages_domain_initiatecheckout = "https://25343b56.amazon-challenge-serverside-capi.pages.dev"
-cloudflare_pages_domain_purchase = "https://15550c2e.amazon-challenge-serverside-capi-purchase.pages.dev"
+cloudflare_pages_domain_initiatecheckout = "https://a403b8ac.amazon-challenge-serverside-capi.pages.dev"
+cloudflare_pages_domain_purchase = "https://74f6c57d.amazon-challenge-serverside-capi-purchase.pages.dev"
 
 # FastAPI Instance
 app = FastAPI()
