@@ -19,8 +19,8 @@ FB_ACCESS_TOKEN = os.getenv("FB_ACCESS_TOKEN", "your_access_token")
 CAPI_URL = f"https://graph.facebook.com/v22.0/{FB_PIXEL_ID}/events?access_token={FB_ACCESS_TOKEN}"
 
 # Other variables
-fallback_URL = "https://woocommerce.build/lp-page"
-landing_page_domain = "https://woocommerce.build"
+fallback_URL = "https://challenge.carlhelgesson.com/5-dagars-challenge"
+landing_page_domain = "https://challenge.carlhelgesson.com"
 cloudflare_pages_domain_initiatecheckout = "https://25343b56.amazon-challenge-serverside-capi.pages.dev"
 cloudflare_pages_domain_purchase = "https://15550c2e.amazon-challenge-serverside-capi-purchase.pages.dev"
 
