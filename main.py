@@ -1,9 +1,10 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
 import hashlib
 import os
+import re, ipaddress # To ensure correct format of _fbp and IP address
 
 # -------------------------------
 # 1. Basic Setup
@@ -15,6 +16,9 @@ CAPI_URL = f"https://graph.facebook.com/v22.0/{FB_PIXEL_ID}/events?access_token=
 fallback_URL = "https://challenge.carlhelgesson.com/5-dagars-challenge"
 landing_page_domain = "https://challenge.carlhelgesson.com"
 cloudflare_pages_domain_purchase = "17ab41dc.day-1-pruchase-tracking.pages.dev"
+
+# Regex for _fbp format: fb.1.<timestamp>.<randomNumber>
+FBP_REGEX = re.compile(r'^fb\.1\.\d+\.\d+$')
 
 app = FastAPI()
 
@@ -33,7 +37,7 @@ app.add_middleware(
 # -------------------------------
 # 2. Data Model
 # -------------------------------
-class PurchasePayload(BaseModel):
+class ClientPayload(BaseModel):
     event_name: str
     event_time: int
     event_source_url: str
@@ -56,22 +60,36 @@ def hash_data(value: str) -> str:
     return hashlib.sha256(value.strip().lower().encode()).hexdigest()
 
 # -------------------------------
-# 4. Purchase Endpoint
+# 4. Conversion Event Endpoint
 # -------------------------------
-@app.post("/purchase")
-def purchase(payload: PurchasePayload, request: Request):
+@app.post("/process-event")
+def process_event(payload: ClientPayload, request: Request):
     """
-    Receives the Purchase event from the Thank You page
+    Receives any event (e.g., Purchase or InitiateCheckout) from the client side,
     and forwards it to Meta via the Conversions API.
     """
-    # 4.1 Extract IP from the request
-    client_ip = request.client.host  # e.g. "123.45.67.89"
+    # 4.1 Extract user data in plain text
+    client_ip = request.client.host if request.client else ""
+    user_agent = payload.user_data.get("user_agent", "")
+    fbc = payload.user_data.get("fbc", "")
+    fbp = payload.user_data.get("fbp", "")
 
-    # 4.2 Hash user data
+    # 4.2 Validate ip address and _fbp format
+    try:
+        ipaddress.ip_address(client_ip)
+    except ValueError:
+        # Not a valid IPv4 or IPv6
+        client_ip = ""
+
+    if not FBP_REGEX.match(fbp):
+        fbp = ""
+
+    # 4.3 Hash only email, first_name, last_name
     hashed_email = hash_data(payload.user_data.get("email", ""))
-    hashed_user_agent = hash_data(payload.user_data.get("user_agent", ""))
+    hashed_first_name = hash_data(payload.user_data.get("first_name", ""))
+    hashed_last_name = hash_data(payload.user_data.get("last_name", ""))
 
-    # 4.3 Build final Meta CAPI payload
+    # 4.4 Build final Meta CAPI payload
     meta_payload = {
         "data": [
             {
@@ -81,17 +99,23 @@ def purchase(payload: PurchasePayload, request: Request):
                 "action_source": payload.action_source,
                 "event_id": payload.event_id,
                 "user_data": {
-                    # FB recommends using specific keys like "em", "ph", "fn", "ln", etc.
-                    "em": hashed_email,
+                    # These fields should be hashed
+                    "em": hashed_email,           # email
+                    "fn": hashed_first_name,      # first name
+                    "ln": hashed_last_name,       # last name
+
+                    # These fields are plain text
                     "client_ip_address": client_ip,
-                    "client_user_agent": hashed_user_agent
+                    "client_user_agent": user_agent,
+                    "fbc": fbc,
+                    "fbp": fbp
                 },
                 "custom_data": payload.custom_data
             }
         ]
     }
 
-    # 4.4 Send to Meta Conversions API
+    # 4.5 Send to Meta Conversions API
     try:
         response = requests.post(CAPI_URL, json=meta_payload)
         response.raise_for_status()  # Raises an exception if 4xx/5xx
@@ -100,7 +124,7 @@ def purchase(payload: PurchasePayload, request: Request):
             "meta_response": response.json()
         }
     except requests.exceptions.RequestException as e:
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+        raise HTTPException(
+            status_code=500,
+            detail=f"Meta CAPI request failed: {str(e)}"
+        )
