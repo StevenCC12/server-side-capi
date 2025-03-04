@@ -99,7 +99,6 @@ def process_event(payload: ClientPayload, request: Request):
                 "event_time": payload.event_time,
                 "event_source_url": payload.event_source_url,
                 "action_source": payload.action_source,
-                "event_id": payload.event_id,
                 "user_data": {
                     # These fields should be hashed
                     "em": hashed_email,           # email
