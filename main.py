@@ -1,10 +1,17 @@
+import logging
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
 import hashlib
 import os
-import re, ipaddress # To ensure correct format of _fbp and IP address
+import re, ipaddress
+
+# Configure logging (adjust level and format as needed)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
 
 # -------------------------------
 # 1. Basic Setup
@@ -28,9 +35,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         landing_page_domain,  # Landing page domain  
-        # Cloudflare Pages domains
         CLOUDFLARE_PAGES_DOMAIN_PURCHASE,
-        CLOUDFLARE_PAGES_DOMAIN_INITIATE_CHECKOUT 
+        CLOUDFLARE_PAGES_DOMAIN_INITIATE_CHECKOUT
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -54,11 +60,10 @@ class ClientPayload(BaseModel):
 def hash_data(value: str) -> str:
     """
     Simple SHA-256 hash for personally identifiable info
-    like email, phone, name, etc. 
+    like email, phone, name, etc.
     """
     if not value:
         return ""
-    # Lowercase + trim recommended for consistent hashing
     return hashlib.sha256(value.strip().lower().encode()).hexdigest()
 
 # -------------------------------
@@ -66,30 +71,30 @@ def hash_data(value: str) -> str:
 # -------------------------------
 @app.post("/process-event")
 def process_event(payload: ClientPayload, request: Request):
-    """
-    Receives any event (e.g., Purchase or InitiateCheckout) from the client side,
-    and forwards it to Meta via the Conversions API.
-    """
+    logging.info("Received event payload: %s", payload.dict())
+
     # 4.1 Extract user data in plain text
     client_ip = request.client.host if request.client else ""
     user_agent = payload.user_data.get("user_agent", "")
     fbc = payload.user_data.get("fbc", "")
     fbp = payload.user_data.get("fbp", "")
+    logging.info("Extracted client_ip: %s, user_agent: %s, fbc: %s, fbp: %s", client_ip, user_agent, fbc, fbp)
 
-    # 4.2 Validate ip address and _fbp format
+    # 4.2 Validate IP address and _fbp format
     try:
         ipaddress.ip_address(client_ip)
     except ValueError:
-        # Not a valid IPv4 or IPv6
+        logging.warning("Invalid client IP address: %s. Setting to empty string.", client_ip)
         client_ip = ""
-
     if not FBP_REGEX.match(fbp):
+        logging.warning("Invalid _fbp format: %s. Setting to empty string.", fbp)
         fbp = ""
 
     # 4.3 Hash only email, first_name, last_name
     hashed_email = hash_data(payload.user_data.get("email", ""))
     hashed_first_name = hash_data(payload.user_data.get("first_name", ""))
     hashed_last_name = hash_data(payload.user_data.get("last_name", ""))
+    logging.info("Hashed email: %s, first_name: %s, last_name: %s", hashed_email, hashed_first_name, hashed_last_name)
 
     # 4.4 Build final Meta CAPI payload
     meta_payload = {
@@ -100,31 +105,32 @@ def process_event(payload: ClientPayload, request: Request):
                 "event_source_url": payload.event_source_url,
                 "action_source": payload.action_source,
                 "user_data": {
-                    # These fields should be hashed
-                    "em": hashed_email,           # email
-                    "fn": hashed_first_name,      # first name
-                    "ln": hashed_last_name,       # last name
-
-                    # These fields are plain text
-                    "client_ip_address": client_ip,
-                    "client_user_agent": user_agent,
-                    "fbc": fbc,
-                    "fbp": fbp
+                    "em": hashed_email,          # Email (hashed)
+                    "fn": hashed_first_name,     # First name (hashed)
+                    "ln": hashed_last_name,      # Last name (hashed)
+                    "client_ip_address": client_ip,  # Plain text
+                    "client_user_agent": user_agent, # Plain text
+                    "fbc": fbc,                  # Plain text
+                    "fbp": fbp                   # Plain text
                 },
                 "custom_data": payload.custom_data
             }
         ]
     }
+    logging.info("Built Meta CAPI payload: %s", meta_payload)
 
     # 4.5 Send to Meta Conversions API
     try:
         response = requests.post(CAPI_URL, json=meta_payload)
-        response.raise_for_status()  # Raises an exception if 4xx/5xx
+        response.raise_for_status()
+        meta_response = response.json()
+        logging.info("Meta CAPI response: %s", meta_response)
         return {
             "status": response.status_code,
-            "meta_response": response.json()
+            "meta_response": meta_response
         }
     except requests.exceptions.RequestException as e:
+        logging.error("Meta CAPI request failed: %s", str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Meta CAPI request failed: {str(e)}"
