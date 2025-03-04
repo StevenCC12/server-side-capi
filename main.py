@@ -15,7 +15,8 @@ CAPI_URL = f"https://graph.facebook.com/v22.0/{FB_PIXEL_ID}/events?access_token=
 
 fallback_URL = "https://challenge.carlhelgesson.com/5-dagars-challenge"
 landing_page_domain = "https://challenge.carlhelgesson.com"
-cloudflare_pages_domain_purchase = "17ab41dc.day-1-pruchase-tracking.pages.dev"
+CLOUDFLARE_PAGES_DOMAIN_PURCHASE = os.getenv("CLOUDFLARE_PAGES_DOMAIN_PURCHASE", "YOUR_CF_DOMAIN_PURCHASE")
+CLOUDFLARE_PAGES_DOMAIN_INITIATE_CHECKOUT = os.getenv("CLOUDFLARE_PAGES_DOMAIN_INITIATE_CHECKOUT", "YOUR_CF_DOMAIN_INITIATE_CHECKOUT")
 
 # Regex for _fbp format: fb.1.<timestamp>.<randomNumber>
 FBP_REGEX = re.compile(r'^fb\.1\.\d+\.\d+$')
@@ -27,7 +28,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         landing_page_domain,  # Landing page domain  
-        cloudflare_pages_domain_purchase # Cloudflare Pages domains
+        # Cloudflare Pages domains
+        CLOUDFLARE_PAGES_DOMAIN_PURCHASE,
+        CLOUDFLARE_PAGES_DOMAIN_INITIATE_CHECKOUT 
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -42,7 +45,6 @@ class ClientPayload(BaseModel):
     event_time: int
     event_source_url: str
     action_source: str
-    event_id: str
     user_data: dict
     custom_data: dict
 
