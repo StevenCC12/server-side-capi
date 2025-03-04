@@ -34,9 +34,10 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        landing_page_domain,  # Landing page domain  
-        CLOUDFLARE_PAGES_DOMAIN_PURCHASE,
-        CLOUDFLARE_PAGES_DOMAIN_INITIATE_CHECKOUT
+        # landing_page_domain,  # Landing page domain  
+        # CLOUDFLARE_PAGES_DOMAIN_PURCHASE,
+        # CLOUDFLARE_PAGES_DOMAIN_INITIATE_CHECKOUT
+        "*" # Allow all origins while testing
     ],
     allow_credentials=True,
     allow_methods=["*"],
