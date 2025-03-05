@@ -80,7 +80,12 @@ def process_event(payload: ClientPayload, request: Request):
     fbp = payload.user_data.get("fbp", "")
     logging.info("Extracted client_ip: %s, user_agent: %s, fbc: %s, fbp: %s", client_ip, user_agent, fbc, fbp)
 
-    # 4.2 Validate IP address and _fbp format
+    # 4.2 If user_agent is empty, fallback to the request's User-Agent header
+    if not user_agent:
+        user_agent = request.headers.get("user-agent", "")
+        logging.info("Falling back to request header user-agent: %s", user_agent)
+
+    # 4.3 Validate IP address and _fbp format
     try:
         ipaddress.ip_address(client_ip)
     except ValueError:
@@ -90,13 +95,13 @@ def process_event(payload: ClientPayload, request: Request):
         logging.warning("Invalid _fbp format: %s. Setting to empty string.", fbp)
         fbp = ""
 
-    # 4.3 Hash only email, first_name, last_name
+    # 4.4 Hash only email, first_name, last_name
     hashed_email = hash_data(payload.user_data.get("email", ""))
     hashed_first_name = hash_data(payload.user_data.get("first_name", ""))
     hashed_last_name = hash_data(payload.user_data.get("last_name", ""))
     logging.info("Hashed email: %s, first_name: %s, last_name: %s", hashed_email, hashed_first_name, hashed_last_name)
 
-    # 4.4 Build final Meta CAPI payload
+    # 4.5 Build final Meta CAPI payload
     meta_payload = {
         "data": [
             {
@@ -105,13 +110,13 @@ def process_event(payload: ClientPayload, request: Request):
                 "event_source_url": payload.event_source_url,
                 "action_source": payload.action_source,
                 "user_data": {
-                    "em": hashed_email,          # Email (hashed)
-                    "fn": hashed_first_name,     # First name (hashed)
-                    "ln": hashed_last_name,      # Last name (hashed)
+                    "em": hashed_email,              # Email (hashed)
+                    "fn": hashed_first_name,         # First name (hashed)
+                    "ln": hashed_last_name,          # Last name (hashed)
                     "client_ip_address": client_ip,  # Plain text
                     "client_user_agent": user_agent, # Plain text
-                    "fbc": fbc,                  # Plain text
-                    "fbp": fbp                   # Plain text
+                    "fbc": fbc,                      # Plain text
+                    "fbp": fbp                       # Plain text
                 },
                 "custom_data": payload.custom_data
             }
