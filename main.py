@@ -7,6 +7,7 @@ import hashlib
 import os
 import re
 import ipaddress
+from typing import Optional
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,7 +44,8 @@ class ClientPayload(BaseModel):
     event_source_url: str
     action_source: str
     user_data: dict
-    custom_data: dict
+    # Make custom_data optional, default to None
+    custom_data: Optional[dict] = None
 
 def hash_data(value: str) -> str:
     if not value:
@@ -97,7 +99,10 @@ def process_event(payload: ClientPayload, request: Request):
     logging.info("Hashed email: %s, first_name: %s, last_name: %s",
                  hashed_email, hashed_first_name, hashed_last_name)
 
-    # 5) Build final Meta CAPI payload
+    # 5) Handle custom_data if not provided
+    custom_data = payload.custom_data if payload.custom_data else {}
+
+    # 6) Build final Meta CAPI payload
     meta_payload = {
         "data": [
             {
@@ -121,7 +126,7 @@ def process_event(payload: ClientPayload, request: Request):
 
     logging.info("Built Meta CAPI payload: %s", meta_payload)
 
-    # 6) Send to Meta Conversions API
+    # 7) Send to Meta Conversions API
     try:
         response = requests.post(CAPI_URL, json=meta_payload)
         response.raise_for_status()
