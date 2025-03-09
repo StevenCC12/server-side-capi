@@ -97,9 +97,10 @@ def process_event(payload: ClientPayload, request: Request):
     hashed_email = hash_data(payload.user_data.get("email", ""))
     hashed_first_name = hash_data(payload.user_data.get("first_name", ""))
     hashed_last_name = hash_data(payload.user_data.get("last_name", ""))
+    hashed_phone = hash_data(payload.user_data.get("phone", ""))
 
-    logging.info("Hashed email: %s, first_name: %s, last_name: %s",
-                 hashed_email, hashed_first_name, hashed_last_name)
+    logging.info("Hashed email: %s, first_name: %s, last_name: %s, phone: %s",
+                 hashed_email, hashed_first_name, hashed_last_name, hashed_phone)
 
     # 5) Handle custom_data if not provided
     custom_data = payload.custom_data if payload.custom_data else {}
@@ -116,6 +117,7 @@ def process_event(payload: ClientPayload, request: Request):
                     "em": hashed_email,
                     "fn": hashed_first_name,
                     "ln": hashed_last_name,
+                    "ph": hashed_phone,
                     "client_ip_address": client_ip,
                     "client_user_agent": server_user_agent,
                     "fbc": fbc,
