@@ -135,12 +135,12 @@ def process_event(payload: ClientPayload, request: Request):
 
     # 7) Build final GA4 payload
     ga_payload = {
-        "client_id": fbp,
-        "user_id": fbp,
+        "client_id": fbp if fbp else "default_client_id",  # Fallback to a default value
         "events": [
             {
                 "name": "generate_lead",
                 "params": {
+                    "event_time": payload.event_time,
                     "utm_source": payload.user_data.get("utm_source", ""),
                     "utm_medium": payload.user_data.get("utm_medium", ""),
                     "utm_content": payload.user_data.get("utm_content", ""),
@@ -174,6 +174,7 @@ def process_event(payload: ClientPayload, request: Request):
         logging.info("GA4 response: %s", ga_response_json)
     except requests.exceptions.RequestException as e:
         logging.error("GA4 request failed: %s", str(e))
+        logging.error("GA4 response content: %s", ga_response.text)  # Log raw response
         raise HTTPException(
             status_code=500,
             detail=f"GA4 request failed: {str(e)}"
