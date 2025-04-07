@@ -141,9 +141,11 @@ def process_event(payload: ClientPayload, request: Request):
                 "name": "generate_lead",
                 "params": {
                     "event_time": payload.event_time,
-                    "utm_source": payload.user_data.get("utm_source", ""),
-                    "utm_medium": payload.user_data.get("utm_medium", ""),
-                    "utm_content": payload.user_data.get("utm_content", ""),
+                    "lead_source": payload.user_data.get("utm_source", ""),
+                    "source_medium": payload.user_data.get("utm_medium", ""),
+                    "ad_id": payload.user_data.get("utm_content", ""),
+                    "currency": "SEK",
+                    "value": 0
                 }
             }
         ]
