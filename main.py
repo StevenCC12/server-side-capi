@@ -17,6 +17,9 @@ logging.basicConfig(
 FB_PIXEL_ID = os.getenv("FB_PIXEL_ID", "YOUR_PIXEL_ID")
 FB_ACCESS_TOKEN = os.getenv("FB_ACCESS_TOKEN", "YOUR_ACCESS_TOKEN")
 CAPI_URL = f"https://graph.facebook.com/v22.0/{FB_PIXEL_ID}/events?access_token={FB_ACCESS_TOKEN}"
+GA4_MEASUREMENT_ID = os.getenv("GA4_MEASUREMENT_ID", "YOUR_GA4_MEASUREMENT_ID")
+GA4_API_SECRET = os.getenv("GA4_API_SECRET", "YOUR_GA4_API_SECRET")
+GA4_URL = f"https://www.google-analytics.com/mp/collect?measurement_id={GA4_MEASUREMENT_ID}&api_secret={GA4_API_SECRET}"
 
 landing_page_domain = "https://masterclass.carlhelgesson.com"
 CLOUDFLARE_PAGES_DOMAIN_LEAD = os.getenv("CLOUDFLARE_PAGES_DOMAIN_LEAD", "YOUR_CF_DOMAIN_LEAD")
@@ -130,19 +133,61 @@ def process_event(payload: ClientPayload, request: Request):
 
     logging.info("Built Meta CAPI payload: %s", meta_payload)
 
-    # 7) Send to Meta Conversions API
+    # 7) Build final GA4 payload
+    ga_payload = {
+        "client_id": fbp,
+        "user_id": fbp,
+        "events": [
+            {
+                "name": "generate_lead",
+                "params": {
+                    "utm_source": payload.user_data.get("utm_source", ""),
+                    "utm_medium": payload.user_data.get("utm_medium", ""),
+                    "utm_content": payload.user_data.get("utm_content", ""),
+                }
+            }
+        ]
+    }
+
+    logging.info("Built GA4 payload: %s", ga_payload)
+
+    # 8) Send to Meta Conversions API
     try:
         response = requests.post(CAPI_URL, json=meta_payload)
         response.raise_for_status()
         meta_response = response.json()
+        meta_status_code = response.status_code
         logging.info("Meta CAPI response: %s", meta_response)
-        return {
-            "status": response.status_code,
-            "meta_response": meta_response
-        }
     except requests.exceptions.RequestException as e:
         logging.error("Meta CAPI request failed: %s", str(e))
         raise HTTPException(
             status_code=500,
             detail=f"Meta CAPI request failed: {str(e)}"
         )
+
+    # 9) Send to GA4 Measurement Protocol
+    try:
+        ga_response = requests.post(GA4_URL, json=ga_payload)
+        ga_response.raise_for_status()
+        ga_response_json = ga_response.json()
+        ga_status_code = ga_response.status_code
+        logging.info("GA4 response: %s", ga_response_json)
+    except requests.exceptions.RequestException as e:
+        logging.error("GA4 request failed: %s", str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"GA4 request failed: {str(e)}"
+        )
+    
+   # Final return with both responses and their status codes
+    return {
+        "meta_response": {
+            "status_code": meta_status_code,
+            "response": meta_response
+        },
+        "ga_response": {
+            "status_code": ga_status_code,
+            "response": ga_response_json
+        }
+    } 
+    
