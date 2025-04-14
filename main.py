@@ -136,7 +136,20 @@ def process_event(payload: ClientPayload, request: Request):
 
     logging.info("Built Meta CAPI payload: %s", meta_payload)
 
-    # 7) Build final GA4 payload
+    # 7) Build GHL payload
+    ghl_payload = {
+        "email": payload.user_data.get("email", ""), # To match contact in GHL
+        "fbc": fbc,
+        "fbp": fbp,
+        "hashed_email": hashed_email,
+        "hashed_first_name": hashed_first_name,
+        "hashed_last_name": hashed_last_name,
+        "hashed_phone": hashed_phone
+    }
+
+    logging.info("Built GHL payload: %s", ghl_payload)
+
+    # 8) Build final GA4 payload
     ga_payload = {
         "client_id": fbp if fbp else "default_client_id",  # Fallback to a default value
         "events": [
@@ -156,19 +169,6 @@ def process_event(payload: ClientPayload, request: Request):
 
     logging.info("Built GA4 payload: %s", ga_payload)
 
-    # 8) Build GHL payload
-    ghl_payload = {
-        "email": payload.user_data.get("email", ""), # To match contact in GHL
-        "fbc": fbc,
-        "fbp": fbp,
-        "hashed_email": hashed_email,
-        "hashed_first_name": hashed_first_name,
-        "hashed_last_name": hashed_last_name,
-        "hashed_phone": hashed_phone
-    }
-
-    logging.info("Built GHL payload: %s", ghl_payload)
-
     # 9) Send to Meta Conversions API
     try:
         response = requests.post(CAPI_URL, json=meta_payload)
@@ -182,23 +182,8 @@ def process_event(payload: ClientPayload, request: Request):
             status_code=500,
             detail=f"Meta CAPI request failed: {str(e)}"
         )
-
-    # 10) Send to GA4 Measurement Protocol
-    try:
-        ga_response = requests.post(GA4_URL, json=ga_payload)
-        ga_response.raise_for_status()
-        ga_response_json = ga_response.json()
-        ga_status_code = ga_response.status_code
-        logging.info("GA4 response: %s", ga_response_json)
-    except requests.exceptions.RequestException as e:
-        logging.error("GA4 request failed: %s", str(e))
-        logging.error("GA4 response content: %s", ga_response.text)  # Log raw response
-        raise HTTPException(
-            status_code=500,
-            detail=f"GA4 request failed: {str(e)}"
-        )
     
-    # 11) Send to GHL
+    # 10) Send to GHL
     try:
         ghl_response = requests.post(
             GHL_WEBHOOK,
@@ -214,6 +199,21 @@ def process_event(payload: ClientPayload, request: Request):
             status_code=500,
             detail=f"GHL request failed: {str(e)}"
         )
+
+    # 11) Send to GA4 Measurement Protocol
+    try:
+        ga_response = requests.post(GA4_URL, json=ga_payload)
+        ga_response.raise_for_status()
+        ga_response_json = ga_response.json()
+        ga_status_code = ga_response.status_code
+        logging.info("GA4 response: %s", ga_response_json)
+    except requests.exceptions.RequestException as e:
+        logging.error("GA4 request failed: %s", str(e))
+        logging.error("GA4 response content: %s", ga_response.text)  # Log raw response
+        raise HTTPException(
+            status_code=500,
+            detail=f"GA4 request failed: {str(e)}"
+        )
     
    # Final return with all responses
     return {
@@ -221,13 +221,13 @@ def process_event(payload: ClientPayload, request: Request):
             "status_code": meta_status_code,
             "response": meta_response
         },
-        "ga_response": {
-            "status_code": ga_status_code,
-            "response": ga_response_json
-        },
         "ghl_response": {
             "status_code": ghl_status_code,
             "response": ghl_response_json
+        },
+        "ga_response": {
+            "status_code": ga_status_code,
+            "response": ga_response_json
         }
     }
     
