@@ -20,6 +20,7 @@ CAPI_URL = f"https://graph.facebook.com/v22.0/{FB_PIXEL_ID}/events?access_token=
 GA4_MEASUREMENT_ID = os.getenv("GA4_MEASUREMENT_ID", "YOUR_GA4_MEASUREMENT_ID")
 GA4_API_SECRET = os.getenv("GA4_API_SECRET", "YOUR_GA4_API_SECRET")
 GA4_URL = f"https://www.google-analytics.com/mp/collect?measurement_id={GA4_MEASUREMENT_ID}&api_secret={GA4_API_SECRET}"
+GHL_WEBHOOK = "https://services.leadconnectorhq.com/hooks/kFKnF888dp7eKChjLxb9/webhook-trigger/16703c4e-0489-4128-a8a4-aa085b56881d"
 
 landing_page_domain = "https://masterclass.carlhelgesson.com"
 CLOUDFLARE_PAGES_DOMAIN_LEAD = os.getenv("CLOUDFLARE_PAGES_DOMAIN_LEAD", "YOUR_CF_DOMAIN_LEAD")
@@ -60,6 +61,8 @@ def hash_data(value: str) -> str:
 @app.post("/process-event")
 def process_event(payload: ClientPayload, request: Request):
     """
+    Handles events like Lead and Purchase, sending data to Meta CAPI, GA4, and GHL.
+
     IP and User-Agent are always extracted server-side, ignoring
     any IP/User-Agent that might come from the client script.
     """
@@ -153,7 +156,20 @@ def process_event(payload: ClientPayload, request: Request):
 
     logging.info("Built GA4 payload: %s", ga_payload)
 
-    # 8) Send to Meta Conversions API
+    # 8) Build GHL payload
+    ghl_payload = {
+        "email": payload.user_data.get("email", ""), # To match contact in GHL
+        "fbc": fbc,
+        "fbp": fbp,
+        "hashed_email": hashed_email,
+        "hashed_first_name": hashed_first_name,
+        "hashed_last_name": hashed_last_name,
+        "hashed_phone": hashed_phone
+    }
+
+    logging.info("Built GHL payload: %s", ghl_payload)
+
+    # 9) Send to Meta Conversions API
     try:
         response = requests.post(CAPI_URL, json=meta_payload)
         response.raise_for_status()
@@ -167,7 +183,7 @@ def process_event(payload: ClientPayload, request: Request):
             detail=f"Meta CAPI request failed: {str(e)}"
         )
 
-    # 9) Send to GA4 Measurement Protocol
+    # 10) Send to GA4 Measurement Protocol
     try:
         ga_response = requests.post(GA4_URL, json=ga_payload)
         ga_response.raise_for_status()
@@ -182,7 +198,24 @@ def process_event(payload: ClientPayload, request: Request):
             detail=f"GA4 request failed: {str(e)}"
         )
     
-   # Final return with both responses and their status codes
+    # 11) Send to GHL
+    try:
+        ghl_response = requests.post(
+            GHL_WEBHOOK,
+            json=ghl_payload
+        )
+        ghl_response.raise_for_status()
+        ghl_response_json = ghl_response.json()
+        ghl_status_code = ghl_response.status_code
+        logging.info("GHL response: %s", ghl_response_json)
+    except requests.exceptions.RequestException as e:
+        logging.error("GHL request failed: %s", str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"GHL request failed: {str(e)}"
+        )
+    
+   # Final return with all responses
     return {
         "meta_response": {
             "status_code": meta_status_code,
@@ -191,6 +224,10 @@ def process_event(payload: ClientPayload, request: Request):
         "ga_response": {
             "status_code": ga_status_code,
             "response": ga_response_json
+        },
+        "ghl_response": {
+            "status_code": ghl_status_code,
+            "response": ghl_response_json
         }
-    } 
+    }
     
