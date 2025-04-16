@@ -65,7 +65,7 @@ def process_event(payload: ClientPayload, request: Request):
     IP and User-Agent are always extracted server-side, ignoring
     any IP/User-Agent that might come from the client script.
     """
-    logging.info("Received event payload: %s", payload.dict())
+    logging.info("Received event payload: %s", payload.model_dump())
 
     # 1) Pull fbc/fbp from the request body if present
     #    But ignore any IP or user_agent from the client side
@@ -116,7 +116,6 @@ def process_event(payload: ClientPayload, request: Request):
             {
                 "event_name": payload.event_name,
                 "event_time": payload.event_time,
-                "event_source_url": payload.event_source_url,
                 "action_source": payload.action_source,
                 "user_data": {
                     "em": hashed_email,
@@ -128,10 +127,14 @@ def process_event(payload: ClientPayload, request: Request):
                     "fbc": fbc,
                     "fbp": fbp
                 },
-                "custom_data": payload.custom_data
+                "custom_data": custom_data
             }
         ]
     }
+
+    # Only include event_source_url if it is provided
+    if payload.event_source_url:
+        meta_payload["data"][0]["event_source_url"] = payload.event_source_url
 
     logging.info("Built Meta CAPI payload: %s", meta_payload)
 
