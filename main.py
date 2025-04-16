@@ -47,11 +47,10 @@ app.add_middleware(
 class ClientPayload(BaseModel):
     event_name: str
     event_time: int
-    event_source_url: str
+    event_source_url: Optional[str] = None  # Make event_source_url optional
     action_source: str
     user_data: dict
-    # Make custom_data optional, default to None
-    custom_data: Optional[dict] = None
+    custom_data: Optional[dict] = None # Make custom_data optional, default to None
 
 def hash_data(value: str) -> str:
     if not value:
