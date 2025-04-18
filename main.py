@@ -132,6 +132,13 @@ def process_event(payload: ClientPayload, request: Request):
         ]
     }
 
+    # Conditionally include external_id (GHL Contact ID)
+    ghl_contact_id = payload.user_data.get("ghl_contact_id", None)  # Assuming GHL Contact ID is passed in user_data
+    if ghl_contact_id:
+        hashed_external_id = hash_data(ghl_contact_id)
+        meta_payload["data"][0]["user_data"]["external_id"] = hashed_external_id
+        logging.info("Included external_id (GHL Contact ID): %s", hashed_external_id)
+
     # Only include event_source_url if it is provided
     if payload.event_source_url:
         meta_payload["data"][0]["event_source_url"] = payload.event_source_url
@@ -151,25 +158,25 @@ def process_event(payload: ClientPayload, request: Request):
 
     logging.info("Built GHL payload: %s", ghl_payload)
 
-    ## 8) Build final GA4 payload
-    #ga_payload = {
-    #    "client_id": fbp if fbp else "default_client_id",  # Fallback to a default value
-    #    "events": [
-    #        {
-    #            "name": "generate_lead",
-    #            "params": {
-    #                "event_time": payload.event_time,
-    #                "lead_source": payload.user_data.get("utm_source", ""),
-    #                "source_medium": payload.user_data.get("utm_medium", ""),
-    #                "ad_id": payload.user_data.get("utm_content", ""),
-    #                "currency": "SEK",
-    #                "value": 0
-    #            }
-    #        }
-    #    ]
-    #}
+    # # 8) Build final GA4 payload
+    # ga_payload = {
+    #     "client_id": fbp if fbp else "default_client_id",  # Fallback to a default value
+    #     "events": [
+    #         {
+    #             "name": "generate_lead",
+    #             "params": {
+    #                 "event_time": payload.event_time,
+    #                 "lead_source": payload.user_data.get("utm_source", ""),
+    #                 "source_medium": payload.user_data.get("utm_medium", ""),
+    #                 "ad_id": payload.user_data.get("utm_content", ""),
+    #                 "currency": "SEK",
+    #                 "value": 0
+    #             }
+    #         }
+    #     ]
+    # }
 
-    #logging.info("Built GA4 payload: %s", ga_payload)
+    # logging.info("Built GA4 payload: %s", ga_payload)
 
     # 9) Send to Meta Conversions API
     try:
@@ -202,20 +209,20 @@ def process_event(payload: ClientPayload, request: Request):
             detail=f"GHL request failed: {str(e)}"
         )
 
-    ## 11) Send to GA4 Measurement Protocol
-    #try:
-    #    ga_response = requests.post(GA4_URL, json=ga_payload)
-    #    ga_response.raise_for_status()
-    #    ga_response_json = ga_response.json()
-    #    ga_status_code = ga_response.status_code
-    #    logging.info("GA4 response: %s", ga_response_json)
-    #except requests.exceptions.RequestException as e:
-    #    logging.error("GA4 request failed: %s", str(e))
-    #    logging.error("GA4 response content: %s", ga_response.text)  # Log raw response
-    #    raise HTTPException(
-    #        status_code=500,
-    #        detail=f"GA4 request failed: {str(e)}"
-    #    )
+    # # 11) Send to GA4 Measurement Protocol
+    # try:
+    #     ga_response = requests.post(GA4_URL, json=ga_payload)
+    #     ga_response.raise_for_status()
+    #     ga_response_json = ga_response.json()
+    #     ga_status_code = ga_response.status_code
+    #     logging.info("GA4 response: %s", ga_response_json)
+    # except requests.exceptions.RequestException as e:
+    #     logging.error("GA4 request failed: %s", str(e))
+    #     logging.error("GA4 response content: %s", ga_response.text)  # Log raw response
+    #     raise HTTPException(
+    #         status_code=500,
+    #         detail=f"GA4 request failed: {str(e)}"
+    #     )
     
    # Final return with all responses
     return {
