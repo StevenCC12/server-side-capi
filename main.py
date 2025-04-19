@@ -153,7 +153,8 @@ def process_event(payload: ClientPayload, request: Request):
         "hashed_email": hashed_email,
         "hashed_first_name": hashed_first_name,
         "hashed_last_name": hashed_last_name,
-        "hashed_phone": hashed_phone
+        "hashed_phone": hashed_phone,
+        "ip_address": client_ip,
     }
 
     logging.info("Built GHL payload: %s", ghl_payload)
