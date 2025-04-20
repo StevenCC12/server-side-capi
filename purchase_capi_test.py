@@ -110,6 +110,14 @@ def process_event(payload: ClientPayload, request: Request):
     # 5) Handle custom_data if not provided
     custom_data = payload.custom_data if payload.custom_data else {}
 
+    # Ensure the 'value' field in custom_data is numeric
+    if "value" in custom_data:
+        try:
+            custom_data["value"] = float(custom_data["value"])
+        except ValueError:
+            logging.warning("Invalid value for 'custom_data.value': %s. Setting to 0.", custom_data["value"])
+            custom_data["value"] = 0.0
+
     # 6) Build final Meta CAPI payload
     meta_payload = {
         "data": [
@@ -236,4 +244,3 @@ def process_event(payload: ClientPayload, request: Request):
         #     "response": ghl_response_json
         # }
     }
-    
