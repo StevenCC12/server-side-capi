@@ -65,6 +65,9 @@ def process_event(payload: ClientPayload, request: Request):
     IP and User-Agent are always extracted server-side, ignoring
     any IP/User-Agent that might come from the client script.
     """
+    # Log the raw payload received
+    logging.info("Raw payload received: %s", request.json())
+    
     logging.info("Received event payload: %s", payload.model_dump())
 
     # 1) Pull fbc/fbp from the request body if present
