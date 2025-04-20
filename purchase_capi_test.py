@@ -65,9 +65,6 @@ def process_event(payload: ClientPayload, request: Request):
     IP and User-Agent are always extracted server-side, ignoring
     any IP/User-Agent that might come from the client script.
     """
-    # Log the raw payload received
-    logging.info("Raw payload received: %s", request.json())
-    
     logging.info("Received event payload: %s", payload.model_dump())
 
     # 1) Pull fbc/fbp from the request body if present
@@ -196,22 +193,22 @@ def process_event(payload: ClientPayload, request: Request):
     #         detail=f"Meta CAPI request failed: {str(e)}"
     #     )
     
-    # 10) Send to GHL
-    try:
-        ghl_response = requests.post(
-            GHL_WEBHOOK,
-            json=ghl_payload
-        )
-        ghl_response.raise_for_status()
-        ghl_response_json = ghl_response.json()
-        ghl_status_code = ghl_response.status_code
-        logging.info("GHL response: %s", ghl_response_json)
-    except requests.exceptions.RequestException as e:
-        logging.error("GHL request failed: %s", str(e))
-        raise HTTPException(
-            status_code=500,
-            detail=f"GHL request failed: {str(e)}"
-        )
+    # # 10) Send to GHL
+    # try:
+    #     ghl_response = requests.post(
+    #         GHL_WEBHOOK,
+    #         json=ghl_payload
+    #     )
+    #     ghl_response.raise_for_status()
+    #     ghl_response_json = ghl_response.json()
+    #     ghl_status_code = ghl_response.status_code
+    #     logging.info("GHL response: %s", ghl_response_json)
+    # except requests.exceptions.RequestException as e:
+    #     logging.error("GHL request failed: %s", str(e))
+    #     raise HTTPException(
+    #         status_code=500,
+    #         detail=f"GHL request failed: {str(e)}"
+    #     )
 
     # # 11) Send to GA4 Measurement Protocol
     # try:
@@ -231,12 +228,12 @@ def process_event(payload: ClientPayload, request: Request):
    # Final return with all responses
     return {
         "meta_response": {
-            "status_code": meta_status_code,
-            "response": meta_response
+            "status_code": "Hopefully 200!",
+            "response": "Good job team, this is my favorite one so far"
         },
-        "ghl_response": {
-            "status_code": ghl_status_code,
-            "response": ghl_response_json
-        }
+        # "ghl_response": {
+        #     "status_code": ghl_status_code,
+        #     "response": ghl_response_json
+        # }
     }
     
