@@ -73,7 +73,9 @@ def process_event(payload: ClientPayload, request: Request):
     fbp = payload.user_data.get("fbp", "")
 
     # 2) Server-side extraction of IP and User-Agent
-    #    A) Use X-Forwarded-For if present, else fallback to request.client.host
+#    A) Use X-Forwarded-For if present, else fallback to request.client.host
+#    A) Use X-Forwarded-For if present, else fallback to request.client.host
+#    A) Use X-Forwarded-For if present, else fallback to request.client.host
     x_forwarded_for = request.headers.get("x-forwarded-for", "")
     if x_forwarded_for:
         ip_list = [ip.strip() for ip in x_forwarded_for.split(",")]
@@ -110,6 +112,14 @@ def process_event(payload: ClientPayload, request: Request):
     # 5) Handle custom_data if not provided
     custom_data = payload.custom_data if payload.custom_data else {}
 
+    # Ensure the 'value' field in custom_data is numeric
+    if "value" in custom_data:
+        try:
+            custom_data["value"] = float(custom_data["value"])
+        except ValueError:
+            logging.warning("Invalid value for 'custom_data.value': %s. Setting to 0.", custom_data["value"])
+            custom_data["value"] = 0.0
+
     # 6) Build final Meta CAPI payload
     meta_payload = {
         "data": [
@@ -133,7 +143,7 @@ def process_event(payload: ClientPayload, request: Request):
     }
 
     # Conditionally include external_id (GHL Contact ID)
-    ghl_contact_id = payload.user_data.get("ghl_contact_id", None)  # Assuming GHL Contact ID is passed in user_data
+    ghl_contact_id = payload.user_data.get("external_id", None)  # Assuming external_id is passed in user_data
     if ghl_contact_id:
         hashed_external_id = hash_data(ghl_contact_id)
         meta_payload["data"][0]["user_data"]["external_id"] = hashed_external_id
@@ -209,7 +219,7 @@ def process_event(payload: ClientPayload, request: Request):
             detail=f"GHL request failed: {str(e)}"
         )
 
-    # # 11) Send to GA4 Measurement Protocol
+# # 11) Send to GA4 Measurement Protocol
     # try:
     #     ga_response = requests.post(GA4_URL, json=ga_payload)
     #     ga_response.raise_for_status()
@@ -235,4 +245,3 @@ def process_event(payload: ClientPayload, request: Request):
             "response": ghl_response_json
         }
     }
-    
