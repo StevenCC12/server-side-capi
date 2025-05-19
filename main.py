@@ -20,7 +20,6 @@ CAPI_URL = f"https://graph.facebook.com/v22.0/{FB_PIXEL_ID}/events?access_token=
 GA4_MEASUREMENT_ID = os.getenv("GA4_MEASUREMENT_ID", "YOUR_GA4_MEASUREMENT_ID")
 GA4_API_SECRET = os.getenv("GA4_API_SECRET", "YOUR_GA4_API_SECRET")
 GA4_URL = f"https://www.google-analytics.com/mp/collect?measurement_id={GA4_MEASUREMENT_ID}&api_secret={GA4_API_SECRET}"
-GHL_WEBHOOK = "https://services.leadconnectorhq.com/hooks/kFKnF888dp7eKChjLxb9/webhook-trigger/16703c4e-0489-4128-a8a4-aa085b56881d"
 
 landing_page_domain = "https://masterclass.carlhelgesson.com"
 CLOUDFLARE_PAGES_DOMAIN_LEAD = os.getenv("CLOUDFLARE_PAGES_DOMAIN_LEAD", "YOUR_CF_DOMAIN_LEAD")
@@ -73,9 +72,6 @@ def process_event(payload: ClientPayload, request: Request):
     fbp = payload.user_data.get("fbp", "")
 
     # 2) Server-side extraction of IP and User-Agent
-#    A) Use X-Forwarded-For if present, else fallback to request.client.host
-#    A) Use X-Forwarded-For if present, else fallback to request.client.host
-#    A) Use X-Forwarded-For if present, else fallback to request.client.host
     x_forwarded_for = request.headers.get("x-forwarded-for", "")
     if x_forwarded_for:
         ip_list = [ip.strip() for ip in x_forwarded_for.split(",")]
@@ -155,39 +151,6 @@ def process_event(payload: ClientPayload, request: Request):
 
     logging.info("Built Meta CAPI payload: %s", meta_payload)
 
-    # 7) Build GHL payload
-    ghl_payload = {
-        "email": payload.user_data.get("email", ""), # To match contact in GHL
-        "fbc": fbc,
-        "fbp": fbp,
-        "hashed_email": hashed_email,
-        "hashed_first_name": hashed_first_name,
-        "hashed_last_name": hashed_last_name,
-        "hashed_phone": hashed_phone
-    }
-
-    logging.info("Built GHL payload: %s", ghl_payload)
-
-    # # 8) Build final GA4 payload
-    # ga_payload = {
-    #     "client_id": fbp if fbp else "default_client_id",  # Fallback to a default value
-    #     "events": [
-    #         {
-    #             "name": "generate_lead",
-    #             "params": {
-    #                 "event_time": payload.event_time,
-    #                 "lead_source": payload.user_data.get("utm_source", ""),
-    #                 "source_medium": payload.user_data.get("utm_medium", ""),
-    #                 "ad_id": payload.user_data.get("utm_content", ""),
-    #                 "currency": "SEK",
-    #                 "value": 0
-    #             }
-    #         }
-    #     ]
-    # }
-
-    # logging.info("Built GA4 payload: %s", ga_payload)
-
     # 9) Send to Meta Conversions API
     try:
         response = requests.post(CAPI_URL, json=meta_payload)
@@ -201,47 +164,11 @@ def process_event(payload: ClientPayload, request: Request):
             status_code=500,
             detail=f"Meta CAPI request failed: {str(e)}"
         )
-    
-    # 10) Send to GHL
-    try:
-        ghl_response = requests.post(
-            GHL_WEBHOOK,
-            json=ghl_payload
-        )
-        ghl_response.raise_for_status()
-        ghl_response_json = ghl_response.json()
-        ghl_status_code = ghl_response.status_code
-        logging.info("GHL response: %s", ghl_response_json)
-    except requests.exceptions.RequestException as e:
-        logging.error("GHL request failed: %s", str(e))
-        raise HTTPException(
-            status_code=500,
-            detail=f"GHL request failed: {str(e)}"
-        )
 
-# # 11) Send to GA4 Measurement Protocol
-    # try:
-    #     ga_response = requests.post(GA4_URL, json=ga_payload)
-    #     ga_response.raise_for_status()
-    #     ga_response_json = ga_response.json()
-    #     ga_status_code = ga_response.status_code
-    #     logging.info("GA4 response: %s", ga_response_json)
-    # except requests.exceptions.RequestException as e:
-    #     logging.error("GA4 request failed: %s", str(e))
-    #     logging.error("GA4 response content: %s", ga_response.text)  # Log raw response
-    #     raise HTTPException(
-    #         status_code=500,
-    #         detail=f"GA4 request failed: {str(e)}"
-    #     )
-    
-   # Final return with all responses
+    # Final return with only Meta response
     return {
         "meta_response": {
             "status_code": meta_status_code,
             "response": meta_response
-        },
-        "ghl_response": {
-            "status_code": ghl_status_code,
-            "response": ghl_response_json
         }
     }
