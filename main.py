@@ -22,7 +22,8 @@ GA4_API_SECRET = os.getenv("GA4_API_SECRET", "YOUR_GA4_API_SECRET")
 GA4_URL = f"https://www.google-analytics.com/mp/collect?measurement_id={GA4_MEASUREMENT_ID}&api_secret={GA4_API_SECRET}"
 
 landing_page_domain = "https://masterclass.carlhelgesson.com"
-CLOUDFLARE_PAGES_DOMAIN_LEAD = os.getenv("CLOUDFLARE_PAGES_DOMAIN_LEAD", "YOUR_CF_DOMAIN_LEAD")
+CLOUDFLARE_PAGES_DOMAIN_LEAD_OPT_IN = os.getenv("CLOUDFLARE_PAGES_DOMAIN_LEAD_OPT_IN", "YOUR_CF_DOMAIN_LEAD")
+CLOUDFLARE_PAGES_DOMAIN_LEAD_THANK_YOU = os.getenv("CLOUDFLARE_PAGES_DOMAIN_LEAD_THANK_YOU", "YOUR_CF_DOMAIN_LEAD")
 CLOUDFLARE_PAGES_DOMAIN_PURCHASE = os.getenv("CLOUDFLARE_PAGES_DOMAIN_PURCHASE", "YOUR_CF_DOMAIN_PURCHASE")
 CLOUDFLARE_PAGES_DOMAIN_INITIATE_CHECKOUT = os.getenv("CLOUDFLARE_PAGES_DOMAIN_INITIATE_CHECKOUT", "YOUR_CF_DOMAIN_INITIATE_CHECKOUT")
 
@@ -34,7 +35,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         landing_page_domain,
-        CLOUDFLARE_PAGES_DOMAIN_LEAD,
+        CLOUDFLARE_PAGES_DOMAIN_LEAD_OPT_IN,
+        CLOUDFLARE_PAGES_DOMAIN_LEAD_THANK_YOU,
         CLOUDFLARE_PAGES_DOMAIN_PURCHASE,
         CLOUDFLARE_PAGES_DOMAIN_INITIATE_CHECKOUT
     ],
@@ -96,11 +98,15 @@ def process_event(payload: ClientPayload, request: Request):
             logging.warning("Invalid _fbp format: %s. Setting to empty string.", fbp)
         fbp = ""
 
-    # 4) Hash user’s name/email from the request body
+    # 4) Hash user’s name/email and residence info from the request body
     hashed_email = hash_data(payload.user_data.get("email", ""))
     hashed_first_name = hash_data(payload.user_data.get("first_name", ""))
     hashed_last_name = hash_data(payload.user_data.get("last_name", ""))
     hashed_phone = hash_data(payload.user_data.get("phone", ""))
+
+    hashed_country = hash_data(payload.user_data.get("country", "").lower()) # GHL uses 2-letter ISO
+    hashed_city = hash_data(payload.user_data.get("city", ""))
+    hashed_zip = hash_data(payload.user_data.get("zip", ""))
 
     logging.info("Hashed email: %s, first_name: %s, last_name: %s, phone: %s",
                  hashed_email, hashed_first_name, hashed_last_name, hashed_phone)
@@ -148,6 +154,11 @@ def process_event(payload: ClientPayload, request: Request):
     # Only include event_source_url if it is provided
     if payload.event_source_url:
         meta_payload["data"][0]["event_source_url"] = payload.event_source_url
+
+    # Add to meta_payload["data"][0]["user_data"]:
+    if hashed_country: meta_payload["data"][0]["user_data"]["ctry"] = hashed_country
+    if hashed_city: meta_payload["data"][0]["user_data"]["ct"] = hashed_city
+    if hashed_zip: meta_payload["data"][0]["user_data"]["zp"] = hashed_zip
 
     logging.info("Built Meta CAPI payload: %s", meta_payload)
 
