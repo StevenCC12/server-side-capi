@@ -86,12 +86,17 @@ def process_event(payload: ClientPayload, request: Request):
     else:
         client_ip = request.client.host if request.client else ""
 
-    # 2b) Use client-side user agent if provided in custom_data, else fallback to server-side
-    custom_data = payload.custom_data if payload.custom_data else {}
-    client_user_agent = ""
-    if isinstance(custom_data, dict):
-        client_user_agent = custom_data.get("user_agent_captured_client_side", "")
-    if not client_user_agent:
+    # 2b) Prioritize client-side user agent from payload.user_data.user_agent, 
+    # then payload.custom_data.user_agent_captured_client_side, then fallback to request headers.
+    
+    client_user_agent = payload.user_data.get("user_agent", "") # Check user_data first
+
+    if not client_user_agent: # If not in user_data, check custom_data (your original logic)
+        custom_data = payload.custom_data if payload.custom_data else {}
+        if isinstance(custom_data, dict):
+            client_user_agent = custom_data.get("user_agent_captured_client_side", "")
+            
+    if not client_user_agent: # If still not found, then fallback to the current request's user agent
         client_user_agent = request.headers.get("user-agent", "")
 
     logging.info("Server-extracted IP: %s, user-agent: %s, fbc: %s, fbp: %s",
