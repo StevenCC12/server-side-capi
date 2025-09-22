@@ -74,7 +74,7 @@ function getFBCookie() { // Renamed for clarity, returns full _fbc cookie if fou
 // ---------------------------
 // 3) Get _fbp from cookies
 // ---------------------------
-function getFBPookie() { // Renamed for clarity, returns full _fbp cookie if found
+function getFBPCookie() { // Renamed for clarity, returns full _fbp cookie if found
   return getCookie('_fbp');
 }
 
@@ -112,7 +112,7 @@ function fireLeadEvent() {
   
   // Get full fbc and fbp cookie values
   let fbcValue = getFBCookie() || ""; // Default to empty string if null
-  let fbpValue = getFBPookie() || ""; // Default to empty string if null
+  let fbpValue = getFBPCookie() || ""; // Default to empty string if null
   
   let userAgentValue = navigator.userAgent;
 
