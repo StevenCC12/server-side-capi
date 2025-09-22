@@ -99,11 +99,19 @@ def process_event(payload: ClientPayload, request: Request):
     # Priority 1: From payload.user_data.user_agent (this is where curl/JS sends original browser UA)
     client_user_agent = payload.user_data.get("user_agent", "") 
 
+    # NEW: Explicitly handle the string "null"
+    if isinstance(client_user_agent, str) and client_user_agent.lower() == 'null':
+        client_user_agent = ""
+
     # Priority 2: Fallback to payload.custom_data.user_agent_captured_client_side (your original check)
     if not client_user_agent:
         temp_custom_data_for_ua = payload.custom_data if payload.custom_data else {}
         if isinstance(temp_custom_data_for_ua, dict):
             client_user_agent = temp_custom_data_for_ua.get("user_agent_captured_client_side", "")
+    
+    # Final check on the fallback as well
+    if isinstance(client_user_agent, str) and client_user_agent.lower() == 'null':
+        client_user_agent = ""
             
     # Priority 3: Fallback to the current request's User-Agent header (e.g., curl's UA)
     if not client_user_agent:
