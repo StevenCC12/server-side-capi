@@ -74,6 +74,23 @@ def hash_data(value: str) -> str:
         return ""
     return hashlib.sha256(value.strip().lower().encode()).hexdigest()
 
+def sanitize_phone_number(phone_str: str) -> str:
+    """
+    Sanitizes a phone number by removing non-digit characters.
+    For Sweden, it also handles the leading '0' by replacing it with the country code '46'.
+    """
+    if not phone_str:
+        return ""
+    
+    # Remove all non-digit characters
+    digits_only = re.sub(r'\D', '', phone_str)
+    
+    # Simple logic for Swedish numbers: if it starts with 0, replace with 46
+    if digits_only.startswith('0'):
+        return '46' + digits_only[1:]
+        
+    return digits_only
+
 @app.post("/process-event") # Ensure this path matches your actual endpoint if it had a trailing slash
 def process_event(payload: ClientPayload, request: Request):
     logging.info("Received event payload: %s", payload.model_dump())
@@ -138,10 +155,14 @@ def process_event(payload: ClientPayload, request: Request):
     hashed_email = hash_data(payload.user_data.get("email", ""))
     hashed_first_name = hash_data(payload.user_data.get("first_name", ""))
     hashed_last_name = hash_data(payload.user_data.get("last_name", ""))
-    hashed_phone = hash_data(payload.user_data.get("phone", ""))
     hashed_country = hash_data(payload.user_data.get("country", "").lower() if payload.user_data.get("country") else "")
     hashed_city = hash_data(payload.user_data.get("city", ""))
     hashed_zip = hash_data(payload.user_data.get("zip", ""))
+
+    # NEW: Sanitize phone number before hashing
+    raw_phone = payload.user_data.get("phone", "")
+    sanitized_phone = sanitize_phone_number(raw_phone)
+    hashed_phone = hash_data(sanitized_phone)
 
     logging.info("Hashed PII: em: %s, fn: %s, ln: %s, ph: %s",
                  "present" if hashed_email else "empty", 
