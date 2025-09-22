@@ -137,7 +137,7 @@ function fireLeadEvent() {
 
 
   // Fire the server-side event
-  fetch("https://server-side-capi-purchase-test.onrender.com/process-event/", {
+  fetch("https://server-side-capi-purchase-test.onrender.com/process-event", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
