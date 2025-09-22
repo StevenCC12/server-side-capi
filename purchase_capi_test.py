@@ -1,8 +1,9 @@
 import logging
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import requests
 import hashlib
 import os
 import re
@@ -45,6 +46,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """
+    This handler logs detailed validation errors for the incoming request payload.
+    It provides more context than the default FastAPI 422 error.
+    """
+    error_details = exc.errors()
+    logging.error(f"Validation Error: {error_details}")
+    logging.error(f"Request body that caused the error: {await request.body()}")
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": "Request validation failed. See server logs for details.", "errors": error_details},
+    )
 
 class ClientPayload(BaseModel):
     event_name: str
