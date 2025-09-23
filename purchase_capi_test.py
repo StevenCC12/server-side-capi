@@ -24,7 +24,7 @@ GA4_API_SECRET = os.getenv("GA4_API_SECRET", "YOUR_GA4_API_SECRET")
 GA4_URL = f"https://www.google-analytics.com/mp/collect?measurement_id={GA4_MEASUREMENT_ID}&api_secret={GA4_API_SECRET}"
 
 landing_page_domain = "https://masterclass.carlhelgesson.com"
-landing_page_summit = "https://summit.carlhelgesson.com/"
+landing_page_summit = "https://summit.carlhelgesson.com"
 CLOUDFLARE_PAGES_DOMAIN_LEAD_OPT_IN = os.getenv("CLOUDFLARE_PAGES_DOMAIN_LEAD_OPT_IN", "YOUR_CF_DOMAIN_LEAD")
 CLOUDFLARE_PAGES_DOMAIN_LEAD_THANK_YOU = os.getenv("CLOUDFLARE_PAGES_DOMAIN_LEAD_THANK_YOU", "YOUR_CF_DOMAIN_LEAD")
 CLOUDFLARE_PAGES_DOMAIN_PURCHASE = os.getenv("CLOUDFLARE_PAGES_DOMAIN_PURCHASE", "YOUR_CF_DOMAIN_PURCHASE")
