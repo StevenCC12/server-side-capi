@@ -168,7 +168,8 @@ function fireLeadEvent() {
         currency: "SEK",
         value: 0.0
       }
-    })
+    }),
+    keepalive: true // NEW: To avoid race conditions
   })
   .then(response => {
     // Optional: Basic response handling, even if silent in production
