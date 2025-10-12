@@ -106,7 +106,7 @@ function fireLeadEvent() {
 // ---------------------------
 
 function attachLeadEventListener() {
-    const submitButton = document.querySelector("button[type='submit']");
+    const submitButton = document.querySelector("button.button-element[type='submit']");
     if (!submitButton) return false; // Button not found yet
 
     // Prevents attaching the listener multiple times if the DOM changes
