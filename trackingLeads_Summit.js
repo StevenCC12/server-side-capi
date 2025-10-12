@@ -1,227 +1,132 @@
+// ===================================================================
+//  Meta CAPI Event Tracking: GHL Lead Event (v3 - Merged)
+//  Combines robust MutationObserver with a reusable send function.
+// ===================================================================
+
 // ---------------------------
-// 0) Get Cookie for Consent (and other cookies)
+// 1) Helper Functions
 // ---------------------------
+
 function getCookie(name) {
-  let match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
-  return match ? match[2] : null;
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(';').shift();
+    return null;
 }
 
-// ---------------------------
-// 1) Extract UTM from URL (UPDATED)
-// ---------------------------
 function extractUTMParams() {
-  let utmSource = "";
-  let utmMedium = "";
-  let utmCampaign = ""; // Added
-  let utmContent = "";
-  let utmTerm = "";    // Added
-  let utmPlacement = ""; // Added
-  let audienceSegment = ""; // Added
-
-  const queryString = window.location.search.substring(1);
-  const re = /([^&=]+)=([^&]*)/g;
-  let match;
-
-  while ((match = re.exec(queryString))) {
-    const paramName = decodeURIComponent(match[1]);
-    const paramValue = decodeURIComponent(match[2]);
-    switch (paramName) {
-      case "utm_source":
-        utmSource = paramValue;
-        break;
-      case "utm_medium":
-        utmMedium = paramValue;
-        break;
-      case "utm_campaign": // Added
-        utmCampaign = paramValue;
-        break;
-      case "utm_content":
-        utmContent = paramValue;
-        break;
-      case "utm_term":    // Added
-        utmTerm = paramValue;
-        break;
-      case "utm_placement": // Added
-        utmPlacement = paramValue;
-        break;
-      case "audience_segment": // Added
-        audienceSegment = paramValue;
-        break;
-    }
-  }
-  return { 
-    utmSource, 
-    utmMedium, 
-    utmCampaign, 
-    utmContent, 
-    utmTerm, 
-    utmPlacement, 
-    audienceSegment 
-  };
+    const params = new URLSearchParams(window.location.search);
+    return {
+        utm_source: params.get('utm_source') || "",
+        utm_medium: params.get('utm_medium') || "",
+        utm_campaign: params.get('utm_campaign') || "",
+        utm_content: params.get('utm_content') || "",
+        utm_term: params.get('utm_term') || "",
+        utm_placement: params.get('utm_placement') || "",
+        audience_segment: params.get('audience_segment') || ""
+    };
 }
 
-// ---------------------------
-// 2) Get _fbc from cookies 
-// (Note: Meta prefers the full cookie string for fbc, not just the click ID part. 
-// Your previous script was splitting it, this one will too, ensure your CAPI endpoint handles it or expects full cookie string)
-// For fbc, Meta expects the full fbc parameter value, which includes the prefix “fb”, the subdomain index, the creation time, and the fbclid.
-// Example: fb.1.1554739892709.AbCdEfGhIjKlMnOpQrStUvWxYz
-// ---------------------------
-function getFBCookie() { // Renamed for clarity, returns full _fbc cookie if found
-  return getCookie('_fbc'); 
-}
-
-// ---------------------------
-// 3) Get _fbp from cookies
-// ---------------------------
-function getFBPCookie() { // Renamed for clarity, returns full _fbp cookie if found
-  return getCookie('_fbp');
-}
-
-// ---------------------------
-// 4) Split full name into first & last
-// ---------------------------
 function splitFullName(fullName) {
-  let parts = (fullName || "").trim().split(" "); // Ensure fullName is a string
-  let firstName = parts.shift() || "";
-  let lastName = parts.join(" ") || "";
-  return { firstName, lastName };
+    const parts = (fullName || "").trim().split(" ");
+    const firstName = parts.shift() || "";
+    const lastName = parts.join(" ") || "";
+    return { firstName, lastName };
+}
+
+function sendEventToServer(payload) {
+    // NOTE: Using your new endpoint name here. Update if needed.
+    const endpoint = "https://server-side-capi-purchase-test.onrender.com/process-event";
+    fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        keepalive: true // Using this excellent addition to prevent race conditions
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log(`CAPI Event [${payload.event_name}] Sent:`, data);
+    })
+    .catch(error => {
+        console.error(`Error sending CAPI [${payload.event_name}] event:`, error);
+    });
 }
 
 // ---------------------------
-// 5) Fire Lead Event (UPDATED custom_data)
+// 2) The Main Tracking Logic
 // ---------------------------
+
 function fireLeadEvent() {
-  // Extract UTM parameters from the URL
-  let { 
-    utmSource, 
-    utmMedium, 
-    utmCampaign,
-    utmContent, 
-    utmTerm,
-    utmPlacement,
-    audienceSegment
-  } = extractUTMParams();
-
-  // Gather form data
-  let fullNameValue = document.querySelector("input[name='full_name']")?.value || "";
-  let emailValue = document.querySelector("input[name='email']")?.value || "";
-  let phoneValue = document.querySelector("input[name='phone']")?.value || "";
-
-  let { firstName, lastName } = splitFullName(fullNameValue);
-  
-  // Get full fbc and fbp cookie values
-  let fbcValue = getFBCookie() || ""; // Default to empty string if null
-  let fbpValue = getFBPCookie() || ""; // Default to empty string if null
-  
-  let userAgentValue = navigator.userAgent;
-
-  // Check if the Terms & Conditions checkbox is present and checked
-  let termsBox = document.querySelector("input[name='terms_and_conditions']");
-  if (termsBox && !termsBox.checked) {
-    // console.log("Terms not checked, aborting lead event.");
-    return; 
-  }
-
-  // Validate required fields (adjust as per your form's actual requirements)
-  // Assuming email is the primary required field for a lead event
-  if (!emailValue.trim()) { 
-    // console.log("Email is missing, aborting lead event.");
-    return; 
-  }
-  // You might want to make firstName also required if your CAPI relies on it heavily
-  // if (!firstName.trim()) {
-  //   console.log("First name is missing (after splitting full name), aborting lead event.");
-  //   return;
-  // }
-
-
-  // Fire the server-side event
-  fetch("https://server-side-capi-purchase-test.onrender.com/process-event", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      event_name: "Lead",
-      event_time: Math.floor(Date.now() / 1000),
-      event_source_url: window.location.href,
-      action_source: "website",
-      user_data: {
-        email: emailValue,
-        first_name: firstName,
-        last_name: lastName,
-        phone: phoneValue,
-        fbc: fbcValue,    // Send the full _fbc cookie value
-        fbp: fbpValue,    // Send the full _fbp cookie value
-        user_agent: userAgentValue
-        // fbclid can also be sent in user_data if captured, 
-        // but fbc is generally preferred if available
-        // "fbclid": extractedFbclidValue (if you extract it separately in extractUTMParams) 
-      },
-      custom_data: { // UPDATED THIS SECTION
-        utm_source: utmSource,
-        utm_medium: utmMedium,       // This will be 'paid' from your FB Ad setup
-        utm_campaign: utmCampaign,   // This will be FB Campaign ID
-        utm_content: utmContent,     // This will be FB Ad ID
-        utm_term: utmTerm,           // This will be FB Ad Set ID
-        utm_placement: utmPlacement,
-        audience_segment: audienceSegment,
-        currency: "SEK",
-        value: 0.0
-      }
-    }),
-    keepalive: true // NEW: To avoid race conditions
-  })
-  .then(response => {
-    // Optional: Basic response handling, even if silent in production
-    // if (!response.ok) {
-    //   console.error("CAPI event send failed with status:", response.status);
-    // } else {
-    //   console.log("CAPI event potentially sent successfully.");
-    // }
-  })
-  .catch(error => {
-    // console.error("Error sending CAPI event:", error);
-  });
-}
-
-// ---------------------------
-// 6) Attach the Click Listener with MutationObserver
-// ---------------------------
-function attachLeadEventListener() {
-  const submitButton = document.querySelector("button[type='submit']");
-  if (!submitButton) return false;
-  if (!submitButton.dataset.leadListenerAttached) {
-    submitButton.addEventListener("click", function() {
-      // Optional: Add a small delay to allow form validation or other scripts to run
-      // setTimeout(fireLeadEvent, 100); 
-      fireLeadEvent();
-    });
-    submitButton.dataset.leadListenerAttached = "true";
-  }
-  return true;
-}
-
-// Use a more robust way to wait for the DOM and then attach the listener
-if (document.readyState === 'loading') { // Loading hasn't finished yet
-  document.addEventListener('DOMContentLoaded', function() {
-    // Try to attach, and use observer if element not yet present (for dynamic forms)
-    if (!attachLeadEventListener()) {
-      const observer = new MutationObserver((mutationsList, observerInstance) => {
-        if (attachLeadEventListener()) {
-          observerInstance.disconnect();
-        }
-      });
-      observer.observe(document.body, { childList: true, subtree: true });
+    // Validate required fields first
+    const emailValue = document.querySelector("input[name='email']")?.value || "";
+    if (!emailValue.trim()) {
+        console.log("Email is missing, aborting lead event.");
+        return;
     }
-  });
-} else { // DOMContentLoaded has already fired
-  // Try to attach, and use observer if element not yet present
-  if (!attachLeadEventListener()) {
-    const observer = new MutationObserver((mutationsList, observerInstance) => {
-      if (attachLeadEventListener()) {
-        observerInstance.disconnect();
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-  }
+    const termsBox = document.querySelector("input[name='terms_and_conditions']");
+    if (termsBox && !termsBox.checked) {
+        console.log("Terms not checked, aborting lead event.");
+        return;
+    }
+
+    // Gather all data
+    const fullNameValue = document.querySelector("input[name='full_name']")?.value || "";
+    const phoneValue = document.querySelector("input[name='phone']")?.value || "";
+    const { firstName, lastName } = splitFullName(fullNameValue);
+    const utmData = extractUTMParams();
+
+    // Construct the payload
+    const leadPayload = {
+        event_name: "Lead",
+        event_time: Math.floor(Date.now() / 1000),
+        event_source_url: window.location.href,
+        action_source: "website",
+        user_data: {
+            email: emailValue,
+            first_name: firstName,
+            last_name: lastName,
+            phone: phoneValue,
+            fbc: getCookie('_fbc') || null,
+            fbp: getCookie('_fbp') || null,
+            user_agent: navigator.userAgent
+        },
+        custom_data: {
+            ...utmData,
+            currency: "SEK",
+            value: 0.0
+        }
+    };
+
+    // Send the data
+    sendEventToServer(leadPayload);
 }
+
+// ---------------------------
+// 3) Attach the Click Listener (Using the robust MutationObserver method)
+// ---------------------------
+
+function attachLeadEventListener() {
+    const submitButton = document.querySelector("button[type='submit']");
+    if (!submitButton) return false; // Button not found yet
+
+    // Prevents attaching the listener multiple times if the DOM changes
+    if (!submitButton.dataset.leadListenerAttached) {
+        submitButton.addEventListener("click", fireLeadEvent);
+        submitButton.dataset.leadListenerAttached = "true";
+        console.log("CAPI Lead event listener attached to submit button.");
+    }
+    return true; // Button found and listener attached
+}
+
+// Wait for the DOM to be ready, then try to attach the listener.
+// If the button isn't there yet (dynamic loading), use the observer to wait for it.
+document.addEventListener('DOMContentLoaded', function() {
+    if (!attachLeadEventListener()) {
+        const observer = new MutationObserver((mutationsList, observerInstance) => {
+            if (attachLeadEventListener()) {
+                observerInstance.disconnect(); // Stop observing once the button is found
+            }
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+    }
+});
