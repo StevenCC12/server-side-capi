@@ -1,6 +1,6 @@
 // ===================================================================
-//  Meta CAPI Event Tracking: GHL InitiateCheckout & Save for Purchase (v2)
-//  Handles variable pricing from order bumps and uses specific GHL selectors.
+//  Meta CAPI Event Tracking: GHL InitiateCheckout & Save for Purchase (v3)
+//  Adds Event ID for deduplication and handles order bumps.
 // ===================================================================
 
 // ---------------------------
@@ -27,12 +27,16 @@ function extractUTMParams() {
     };
 }
 
-// Added this function back in to handle the 'name' field
 function splitFullName(fullName) {
     const parts = (fullName || "").trim().split(" ");
     const firstName = parts.shift() || "";
     const lastName = parts.join(" ") || "";
     return { firstName, lastName };
+}
+
+// NEW: Function to generate a unique event ID.
+function generateEventId() {
+    return 'evt_' + Date.now() + '.' + Math.random().toString(36).substring(2, 9);
 }
 
 function sendEventToServer(payload) {
@@ -59,24 +63,35 @@ function sendEventToServer(payload) {
 function handleCheckout() {
     console.log("Checkout button clicked, capturing data.");
     
-    // --- Step 1: Determine the price based on the order bump ---
-    const orderBumpCheckbox = document.querySelector('input[name="order-bump"]');
-    let purchaseValue = 297.00; // Base price of the upsell
-    
-    if (orderBumpCheckbox && orderBumpCheckbox.checked) {
-        purchaseValue = 394.00; // Price with the order bump
-        console.log("Order bump is checked. Total value:", purchaseValue);
+    // --- Step 1: Generate a unique Event ID for this transaction ---
+    // NEW: Generate the ID first.
+    const eventId = generateEventId();
+    console.log("Generated Event ID:", eventId);
+
+    // --- Step 2: Populate the hidden form field with the Event ID ---
+    // NEW: Find the hidden field and set its value.
+    // The name attribute often matches the custom field key. Please verify this.
+    const hiddenEventIdField = document.querySelector('input[name="capi_event_id"]');
+    if (hiddenEventIdField) {
+        hiddenEventIdField.value = eventId;
+        console.log("Populated hidden field with Event ID.");
     } else {
-        console.log("Order bump is NOT checked. Total value:", purchaseValue);
+        console.warn("CAPI Tracking: Could not find the hidden 'CAPI Event ID' field.");
+    }
+    
+    // --- Step 3: Determine the price based on the order bump ---
+    const orderBumpCheckbox = document.querySelector('input[name="order-bump"]');
+    let purchaseValue = 297.00; // Base price
+    if (orderBumpCheckbox && orderBumpCheckbox.checked) {
+        purchaseValue = 394.00; // Price with bump
     }
 
-    // --- Step 2: Gather all user data from the form using your new selectors ---
+    // --- Step 4: Gather user data ---
     const fullNameValue = document.querySelector('input[name="name"]')?.value || "";
     const emailValue = document.querySelector('input[name="email"]')?.value || "";
     const phoneValue = document.querySelector('input[name="phone"]')?.value || "";
     const cityValue = document.querySelector('input[name="city"]')?.value || "";
     const zipValue = document.querySelector('input[name="zipcode"]')?.value || "";
-    
     const { firstName, lastName } = splitFullName(fullNameValue);
     
     if (!emailValue.trim()) {
@@ -86,8 +101,9 @@ function handleCheckout() {
     
     const utmData = extractUTMParams();
 
-    // --- Step 3: Save ALL data for the Thank You page ---
+    // --- Step 5: Save data (including Event ID) for the Thank You page ---
     const purchaseData = {
+        event_id: eventId, // NEW: Include the Event ID here.
         user_data: {
             email: emailValue,
             first_name: firstName,
@@ -101,21 +117,22 @@ function handleCheckout() {
         },
         custom_data: {
             ...utmData,
-            value: purchaseValue, // Save the final calculated value
+            value: purchaseValue,
             currency: "SEK"
         }
     };
     sessionStorage.setItem('ghl_purchase_data', JSON.stringify(purchaseData));
     console.log("Saved data to sessionStorage for Thank You page.", purchaseData);
 
-    // --- Step 4: Fire the InitiateCheckout event now ---
+    // --- Step 6: Fire the InitiateCheckout event now (with Event ID) ---
     const initiateCheckoutPayload = {
+        event_id: eventId, // NEW: Include the Event ID here.
         event_name: "InitiateCheckout",
         event_time: Math.floor(Date.now() / 1000),
         event_source_url: window.location.href,
         action_source: "website",
-        user_data: purchaseData.user_data, // Reuse the data
-        custom_data: purchaseData.custom_data // Reuse the data
+        user_data: purchaseData.user_data,
+        custom_data: purchaseData.custom_data
     };
 
     sendEventToServer(initiateCheckoutPayload);
@@ -124,13 +141,9 @@ function handleCheckout() {
 // ---------------------------
 // 3) Attach the Click Listener
 // ---------------------------
-
 function attachCheckoutListener() {
-    // Using the specific selector for your button
     const checkoutButton = document.querySelector('button.form-btn');
-    
     if (!checkoutButton) return false;
-
     if (!checkoutButton.dataset.checkoutListenerAttached) {
         checkoutButton.addEventListener("click", handleCheckout);
         checkoutButton.dataset.checkoutListenerAttached = "true";
