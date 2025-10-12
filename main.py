@@ -17,12 +17,13 @@ logging.basicConfig(
 
 FB_PIXEL_ID = os.getenv("FB_PIXEL_ID", "YOUR_PIXEL_ID")
 FB_ACCESS_TOKEN = os.getenv("FB_ACCESS_TOKEN", "YOUR_ACCESS_TOKEN")
-CAPI_URL = f"https://graph.facebook.com/v19.0/{FB_PIXEL_ID}/events?access_token={FB_ACCESS_TOKEN}" # Updated to v19.0, adjust if needed
+CAPI_URL = f"https://graph.facebook.com/v24.0/{FB_PIXEL_ID}/events?access_token={FB_ACCESS_TOKEN}" # Updated to v24.0, adjust if needed
 GA4_MEASUREMENT_ID = os.getenv("GA4_MEASUREMENT_ID", "YOUR_GA4_MEASUREMENT_ID")
 GA4_API_SECRET = os.getenv("GA4_API_SECRET", "YOUR_GA4_API_SECRET")
 GA4_URL = f"https://www.google-analytics.com/mp/collect?measurement_id={GA4_MEASUREMENT_ID}&api_secret={GA4_API_SECRET}"
 
 landing_page_domain = "https://masterclass.carlhelgesson.com"
+summit_domain = "https://summit.carlhelgesson.com/"
 CLOUDFLARE_PAGES_DOMAIN_LEAD_OPT_IN = os.getenv("CLOUDFLARE_PAGES_DOMAIN_LEAD_OPT_IN", "YOUR_CF_DOMAIN_LEAD")
 CLOUDFLARE_PAGES_DOMAIN_LEAD_THANK_YOU = os.getenv("CLOUDFLARE_PAGES_DOMAIN_LEAD_THANK_YOU", "YOUR_CF_DOMAIN_LEAD")
 CLOUDFLARE_PAGES_DOMAIN_PURCHASE = os.getenv("CLOUDFLARE_PAGES_DOMAIN_PURCHASE", "YOUR_CF_DOMAIN_PURCHASE")
@@ -36,6 +37,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         landing_page_domain,
+        summit_domain,
         CLOUDFLARE_PAGES_DOMAIN_LEAD_OPT_IN,
         CLOUDFLARE_PAGES_DOMAIN_LEAD_THANK_YOU,
         CLOUDFLARE_PAGES_DOMAIN_PURCHASE,
