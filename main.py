@@ -49,6 +49,7 @@ app.add_middleware(
 )
 
 class ClientPayload(BaseModel):
+    event_id: Optional[str] = None # New event ID for deduplication
     event_name: str
     event_time: int
     event_source_url: Optional[str] = None
@@ -70,7 +71,7 @@ async def cache_event_id(payload: dict = Body(...)):
     event_id = payload.get("event_id")
     if email and event_id:
         # Store the event_id using the email as the key
-        event_id_cache[email] = event_id
+        event_id_cache[email.strip().lower()] = event_id
         logging.info(f"Cached event_id {event_id} for email {email}")
         return {"status": "cached"}
     return {"status": "error", "message": "Missing email or event_id"}
@@ -82,8 +83,8 @@ def process_event(payload: ClientPayload, request: Request):
     if not event_id and payload.event_name == "Purchase":
         # If it's a server-side Purchase event, try to find a cached event_id
         email = payload.user_data.get("email")
-        if email and email in event_id_cache:
-            event_id = event_id_cache.pop(email) # Use it and remove it
+        if email and email.strip().lower() in event_id_cache:
+            event_id = event_id_cache.pop(email.strip().lower()) # Use it and remove it
             logging.info(f"Found and attached cached event_id {event_id} for email {email}")
     # --- End of New Block ---
 
