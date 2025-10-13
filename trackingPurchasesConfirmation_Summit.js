@@ -1,6 +1,5 @@
 // ===================================================================
-//  Meta CAPI Event Tracking: GHL Buyer Thank You Page (v1)
-//  Fires Purchase event and submits hidden form to sync event_id.
+//  Meta CAPI: GHL Buyer Thank You Page (v2 - Production)
 // ===================================================================
 
 function sendEventToServer(payload) {
@@ -23,8 +22,6 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log("Found purchase data in sessionStorage.");
         const savedData = JSON.parse(savedDataString);
         
-        // --- Part 1: Submit the invisible form to sync the event_id to the contact record ---
-        // NOTE: These selectors target standard GHL form fields. Verify them if issues arise.
         const hiddenFormEmail = document.querySelector('form input[name="email"]');
         const hiddenFormEventId = document.querySelector('form input[name="capi_event_id"]');
         const hiddenFormSubmitButton = document.querySelector('form button[type="submit"]');
@@ -32,16 +29,14 @@ document.addEventListener('DOMContentLoaded', function() {
         if (hiddenFormEmail && hiddenFormEventId && hiddenFormSubmitButton) {
             hiddenFormEmail.value = savedData.user_data.email;
             hiddenFormEventId.value = savedData.event_id;
-            
-            console.log(`Populating invisible form with Email and Event ID (${savedData.event_id}) and submitting...`);
-            hiddenFormSubmitButton.click(); // This updates the contact in GHL
+            console.log(`Populating invisible form with Event ID (${savedData.event_id}) and submitting...`);
+            hiddenFormSubmitButton.click();
         } else {
-            console.warn("Could not find all elements of the hidden CAPI form on the Thank You page.");
+            console.warn("Could not find hidden CAPI form on Thank You page.");
         }
 
-        // --- Part 2: Fire the client-side Purchase event ---
         const purchasePayload = {
-            event_id: savedData.event_id, // The crucial matching ID
+            event_id: savedData.event_id,
             event_name: "Purchase",
             event_time: Math.floor(Date.now() / 1000),
             event_source_url: window.location.href,
@@ -52,10 +47,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         sendEventToServer(purchasePayload);
         
-        // --- Part 3: Clean up ---
         sessionStorage.removeItem('ghl_purchase_data');
-        console.log("Cleared purchase data from sessionStorage.");
-
     } else {
         console.log("No purchase data found in sessionStorage on Thank You page.");
     }
