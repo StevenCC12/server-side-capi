@@ -62,6 +62,10 @@ def hash_data(value: str) -> str:
         return ""
     return hashlib.sha256(value.strip().lower().encode()).hexdigest()
 
+@app.get("/health-check")
+def health_check():
+    return {"status": "ok", "message": "The new code is live!"}
+
 # This is our temporary storage for Event ID, our "coat check".
 event_id_cache = {}
 
