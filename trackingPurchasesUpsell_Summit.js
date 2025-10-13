@@ -1,8 +1,7 @@
 // ===================================================================
-//  Meta CAPI: GHL InitiateCheckout & Save for Purchase (v4 - Production)
+//  Meta CAPI: GHL InitiateCheckout & Save for Purchase (v5 - Production Ready)
 // ===================================================================
 
-// --- Helper Functions ---
 function getCookie(name) {
     const value = `; ${document.cookie}`;
     const parts = value.split(`; ${name}=`);
@@ -43,7 +42,6 @@ function sendEventToServer(payload) {
     .catch(error => { console.error(`Error sending CAPI [${payload.event_name}] event:`, error); });
 }
 
-// --- Main Logic ---
 function handleCheckout() {
     const eventId = generateEventId();
     const orderBumpCheckbox = document.querySelector('input[name="order-bump"]');
@@ -81,18 +79,17 @@ function handleCheckout() {
     sendEventToServer(initiateCheckoutPayload);
 }
 
-// --- Attach Listener ---
-function attachCheckoutListener() {
-    const checkoutButton = document.querySelector('button.form-btn');
-    if (!checkoutButton) return false;
-    if (!checkoutButton.dataset.checkoutListenerAttached) {
-        checkoutButton.addEventListener("click", handleCheckout);
-        checkoutButton.dataset.checkoutListenerAttached = "true";
-        console.log("CAPI Checkout event listener attached.");
+function initializeTracking() {
+    function attachCheckoutListener() {
+        const checkoutButton = document.querySelector('button.form-btn');
+        if (!checkoutButton) return false;
+        if (!checkoutButton.dataset.checkoutListenerAttached) {
+            checkoutButton.addEventListener("click", handleCheckout);
+            checkoutButton.dataset.checkoutListenerAttached = "true";
+            console.log("CAPI Checkout event listener attached.");
+        }
+        return true;
     }
-    return true;
-}
-document.addEventListener('DOMContentLoaded', function() {
     if (!attachCheckoutListener()) {
         const observer = new MutationObserver(() => {
             if (attachCheckoutListener()) {
@@ -101,4 +98,13 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         observer.observe(document.body, { childList: true, subtree: true });
     }
-});
+}
+
+// THE ROBUST SOLUTION: Check if the page is already loaded.
+if (document.readyState === 'loading') {
+    // Page is still loading, wait for it to be ready.
+    document.addEventListener('DOMContentLoaded', initializeTracking);
+} else {
+    // Page is already ready, run the code now.
+    initializeTracking();
+}

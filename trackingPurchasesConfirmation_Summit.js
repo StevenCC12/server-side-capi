@@ -1,5 +1,5 @@
 // ===================================================================
-//  Meta CAPI: GHL Buyer Thank You Page (v2 - Production)
+//  Meta CAPI: GHL Buyer Thank You Page (v3 - Production Ready)
 // ===================================================================
 
 function sendEventToServer(payload) {
@@ -15,7 +15,7 @@ function sendEventToServer(payload) {
     .catch(error => console.error(`Error sending CAPI [${payload.event_name}] event:`, error));
 }
 
-document.addEventListener('DOMContentLoaded', function() {
+function initializeThankYouTracking() {
     const savedDataString = sessionStorage.getItem('ghl_purchase_data');
 
     if (savedDataString) {
@@ -46,9 +46,17 @@ document.addEventListener('DOMContentLoaded', function() {
         };
         
         sendEventToServer(purchasePayload);
-        
         sessionStorage.removeItem('ghl_purchase_data');
     } else {
         console.log("No purchase data found in sessionStorage on Thank You page.");
     }
-});
+}
+
+// THE ROBUST SOLUTION: Check if the page is already loaded.
+if (document.readyState === 'loading') {
+    // Page is still loading, wait for it to be ready.
+    document.addEventListener('DOMContentLoaded', initializeThankYouTracking);
+} else {
+    // Page is already ready, run the code now.
+    initializeThankYouTracking();
+}
