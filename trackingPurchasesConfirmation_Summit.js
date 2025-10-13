@@ -1,5 +1,6 @@
 // ===================================================================
-//  Meta CAPI: GHL Buyer Thank You Page (v3 - Production Ready)
+//  Meta CAPI: GHL Buyer Thank You Page (v4 - Final Production)
+//  Corrects selector for hidden custom field.
 // ===================================================================
 
 function sendEventToServer(payload) {
@@ -23,7 +24,9 @@ function initializeThankYouTracking() {
         const savedData = JSON.parse(savedDataString);
         
         const hiddenFormEmail = document.querySelector('form input[name="email"]');
-        const hiddenFormEventId = document.querySelector('form input[name="capi_event_id"]');
+        // --- THIS IS THE CRUCIAL FIX ---
+        // We now target the input using its stable 'data-q' attribute.
+        const hiddenFormEventId = document.querySelector('form input[data-q="capi_event_id"]');
         const hiddenFormSubmitButton = document.querySelector('form button[type="submit"]');
 
         if (hiddenFormEmail && hiddenFormEventId && hiddenFormSubmitButton) {
@@ -32,7 +35,12 @@ function initializeThankYouTracking() {
             console.log(`Populating invisible form with Event ID (${savedData.event_id}) and submitting...`);
             hiddenFormSubmitButton.click();
         } else {
-            console.warn("Could not find hidden CAPI form on Thank You page.");
+            // This warning will now tell us exactly which piece is missing if it fails again.
+            console.warn("Could not find hidden CAPI form on Thank You page. Check selectors:", {
+                emailFieldFound: !!hiddenFormEmail,
+                eventIdFieldFound: !!hiddenFormEventId,
+                submitButtonFound: !!hiddenFormSubmitButton
+            });
         }
 
         const purchasePayload = {
@@ -54,9 +62,7 @@ function initializeThankYouTracking() {
 
 // THE ROBUST SOLUTION: Check if the page is already loaded.
 if (document.readyState === 'loading') {
-    // Page is still loading, wait for it to be ready.
     document.addEventListener('DOMContentLoaded', initializeThankYouTracking);
 } else {
-    // Page is already ready, run the code now.
     initializeThankYouTracking();
 }
