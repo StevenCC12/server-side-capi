@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const savedData = JSON.parse(savedDataString);
         
         // --- Part 1: Submit the invisible form to sync the event_id to the contact record ---
+        // NOTE: These selectors target standard GHL form fields. Verify them if issues arise.
         const hiddenFormEmail = document.querySelector('form input[name="email"]');
         const hiddenFormEventId = document.querySelector('form input[name="capi_event_id"]');
         const hiddenFormSubmitButton = document.querySelector('form button[type="submit"]');
@@ -53,6 +54,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // --- Part 3: Clean up ---
         sessionStorage.removeItem('ghl_purchase_data');
+        console.log("Cleared purchase data from sessionStorage.");
 
     } else {
         console.log("No purchase data found in sessionStorage on Thank You page.");
