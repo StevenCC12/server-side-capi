@@ -2,6 +2,7 @@
 //  Meta CAPI: GHL InitiateCheckout & Save for Purchase (v5 - Production Ready)
 // ===================================================================
 
+// Helper function to parse cookies
 function getCookie(name) {
     const value = `; ${document.cookie}`;
     const parts = value.split(`; ${name}=`);
@@ -30,7 +31,7 @@ function generateEventId() {
     return 'evt_' + Date.now() + '.' + Math.random().toString(36).substring(2, 9);
 }
 function sendEventToServer(payload) {
-    const endpoint = "https://server-side-capi-purchase-test.onrender.com/process-event";
+    const endpoint = "https://server-side-capi.onrender.com/process-event";
     fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
