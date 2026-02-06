@@ -1,253 +1,224 @@
 import logging
 from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 import requests
 import hashlib
 import os
 import re
 import json
 import ipaddress
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
+# --- Environment Setup ---
+# Render sets RENDER=true. If missing, we load from local .env
+if os.getenv("RENDER") is None:
+    from dotenv import load_dotenv
+    load_dotenv()
+
+# --- Configuration ---
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s"
 )
 
-FB_PIXEL_ID = os.getenv("FB_PIXEL_ID", "YOUR_PIXEL_ID")
-FB_ACCESS_TOKEN = os.getenv("FB_ACCESS_TOKEN", "YOUR_ACCESS_TOKEN")
-CAPI_URL = f"https://graph.facebook.com/v24.0/{FB_PIXEL_ID}/events?access_token={FB_ACCESS_TOKEN}" # Updated to v24.0, adjust if needed
-GA4_MEASUREMENT_ID = os.getenv("GA4_MEASUREMENT_ID", "YOUR_GA4_MEASUREMENT_ID")
-GA4_API_SECRET = os.getenv("GA4_API_SECRET", "YOUR_GA4_API_SECRET")
-GA4_URL = f"https://www.google-analytics.com/mp/collect?measurement_id={GA4_MEASUREMENT_ID}&api_secret={GA4_API_SECRET}"
+FB_PIXEL_ID = os.getenv("FB_PIXEL_ID")
+FB_ACCESS_TOKEN = os.getenv("FB_ACCESS_TOKEN")
+
+# If this is set in .env or Render, all events go to the "Test Events" tab.
+# If this is None/Empty (in Production), events go to the real dataset.
+ENV_TEST_CODE = os.getenv("META_TEST_CODE") 
+
+# Check for critical vars
+if not FB_PIXEL_ID or not FB_ACCESS_TOKEN:
+    logging.warning("⚠️  Missing FB_PIXEL_ID or FB_ACCESS_TOKEN. CAPI requests will fail.")
+
+# API Version
+CAPI_URL = f"https://graph.facebook.com/v24.0/{FB_PIXEL_ID}/events?access_token={FB_ACCESS_TOKEN}"
 
 FBP_REGEX = re.compile(r'^fb\.1\.\d+\.\d+$')
 
 app = FastAPI()
 
+# --- CORS Configuration ---
+origins = [
+    "https://summit.carlhelgesson.com",
+    "http://localhost:8000", # Good to keep for local testing
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=origins, 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# --- Data Models ---
+
 class ClientPayload(BaseModel):
-    event_id: Optional[str] = None # New event ID for deduplication
+    event_id: Optional[str] = None # Critical for Deduplication
     event_name: str
     event_time: int
     event_source_url: Optional[str] = None
     action_source: str
-    user_data: dict # Expects fields like email, first_name, user_agent (original browser)
+    user_data: dict 
     custom_data: Optional[dict] = None
 
-def hash_data(value: str) -> str:
+class MetaTestPayload(BaseModel):
+    data: List[ClientPayload]
+    test_event_code: Optional[str] = None
+
+# --- Helper Functions ---
+
+def hash_data(value: Optional[str]) -> str:
     if not value:
         return ""
+    if not isinstance(value, str):
+        value = str(value)
     return hashlib.sha256(value.strip().lower().encode()).hexdigest()
 
-@app.get("/health-check")
-def health_check():
-    return {"status": "ok", "message": "The new code is live!"}
+# --- Core Processor ---
 
-# This is our temporary storage for Event ID, our "coat check".
-event_id_cache = {}
+async def _process_single_event(payload: ClientPayload, request: Request, test_event_code: Optional[str] = None):
+    """
+    Processes a single event: extracts IP/UA, hashes PII, and sends to Meta.
+    """
+    
+    # 1. Extract Identity & Network Data
+    fbc_val = payload.user_data.get("fbc")
+    fbp_val = payload.user_data.get("fbp")
 
-@app.post("/cache-event-id")
-async def cache_event_id(payload: dict = Body(...)):
-    email = payload.get("email")
-    event_id = payload.get("event_id")
-    if email and event_id:
-        # Store the event_id using the email as the key
-        event_id_cache[email.strip().lower()] = event_id
-        logging.info(f"Cached event_id {event_id} for email {email}")
-        return {"status": "cached"}
-    return {"status": "error", "message": "Missing email or event_id"}
-
-@app.post("/process-event") # Ensure this path matches your actual endpoint if it had a trailing slash
-def process_event(payload: ClientPayload, request: Request):
-    # --- Event Deduplication Logic ---
-    event_id = payload.model_dump().get("event_id") # Check if client sent one
-    if not event_id and payload.event_name == "Purchase":
-        # If it's a server-side Purchase event, try to find a cached event_id
-        email = payload.user_data.get("email")
-        if email and email.strip().lower() in event_id_cache:
-            event_id = event_id_cache.pop(email.strip().lower()) # Use it and remove it
-            logging.info(f"Found and attached cached event_id {event_id} for email {email}")
-    # --- End of New Block ---
-
-    logging.info("Received event payload: %s", payload.model_dump())
-
-    # 1) Pull fbc/fbp from the request body if present
-    fbc_val = payload.user_data.get("fbc", "")
-    fbp_val = payload.user_data.get("fbp", "")
-
-    if fbc_val is None or (isinstance(fbc_val, str) and fbc_val.lower() == 'null'):
-        fbc_val = ""
-    if fbp_val is None or (isinstance(fbp_val, str) and fbp_val.lower() == 'null'):
-        fbp_val = ""
-
-    # 2a) Server-side extraction of IP
-    x_forwarded_for = request.headers.get("x-forwarded-for", "")
-    if x_forwarded_for:
-        ip_list = [ip.strip() for ip in x_forwarded_for.split(",")]
-        client_ip = ip_list[0] if ip_list else (request.client.host if request.client else "")
-    else:
-        client_ip = request.client.host if request.client else ""
-
-    # --- MODIFIED SECTION 2b: User Agent Handling ---
-    # Priority 1: From payload.user_data.user_agent (this is where curl/JS sends original browser UA)
-    client_user_agent = payload.user_data.get("user_agent", "") 
-
-    # Priority 2: Fallback to payload.custom_data.user_agent_captured_client_side (your original check)
-    if not client_user_agent:
-        temp_custom_data_for_ua = payload.custom_data if payload.custom_data else {}
-        if isinstance(temp_custom_data_for_ua, dict):
-            client_user_agent = temp_custom_data_for_ua.get("user_agent_captured_client_side", "")
-            
-    # Priority 3: Fallback to the current request's User-Agent header (e.g., curl's UA)
-    if not client_user_agent:
-        client_user_agent = request.headers.get("user-agent", "")
-    # --- END OF MODIFIED SECTION 2b ---
-
-    logging.info("Server-extracted IP: %s, Determined client_user_agent for Meta: %s, fbc: %s, fbp: %s",
-                 client_ip, client_user_agent, fbc_val, fbp_val)
-
-    # 3) Validate IP & fbp
+    # IP Handling: Priority to Payload, then Header, then Request Host
+    payload_ip = payload.user_data.get("client_ip_address")
+    if not payload_ip:
+        x_forwarded_for = request.headers.get("x-forwarded-for", "")
+        payload_ip = x_forwarded_for.split(",")[0].strip() if x_forwarded_for else (request.client.host if request.client else "")
+    
+    # Validate IP
     try:
-        if client_ip: # Only validate if client_ip is not an empty string
-            ipaddress.ip_address(client_ip)
+        if payload_ip: ipaddress.ip_address(payload_ip)
     except ValueError:
-        logging.warning("Invalid IP address: %s. Setting to empty string.", client_ip)
-        client_ip = ""
+        payload_ip = None
 
-    if not FBP_REGEX.match(fbp_val):
-        if fbp_val:
-            logging.warning("Invalid _fbp format: %s. Setting to empty string.", fbp_val)
-        fbp_val = ""
+    # User Agent Priority
+    client_user_agent = payload.user_data.get("user_agent") or \
+                        (payload.custom_data.get("user_agent_captured_client_side") if payload.custom_data else None) or \
+                        request.headers.get("user-agent")
 
-    # 4) Hash user’s PII from the request body
-    hashed_email = hash_data(payload.user_data.get("email", ""))
-    hashed_first_name = hash_data(payload.user_data.get("first_name", ""))
-    hashed_last_name = hash_data(payload.user_data.get("last_name", ""))
-    hashed_phone = hash_data(payload.user_data.get("phone", ""))
-    hashed_country = hash_data(payload.user_data.get("country", "").lower() if payload.user_data.get("country") else "")
-    hashed_city = hash_data(payload.user_data.get("city", ""))
-    hashed_zip = hash_data(payload.user_data.get("zip", ""))
-
-    logging.info("Hashed PII: em: %s, fn: %s, ln: %s, ph: %s",
-                 "present" if hashed_email else "empty", 
-                 "present" if hashed_first_name else "empty", 
-                 "present" if hashed_last_name else "empty", 
-                 "present" if hashed_phone else "empty")
-
-    # --- MODIFIED SECTION 5: Clean custom_data ---
-    # This section now directly and safely uses payload.custom_data
-    final_cleaned_custom_data = {}
-    source_custom_data_from_payload = payload.custom_data # This is Optional[dict]
-
-    if source_custom_data_from_payload: # True if it's a non-empty dict
-        for key, value in source_custom_data_from_payload.items():
-            if isinstance(value, str) and value.lower() == 'null':
-                # Do not add "null" strings to final_cleaned_custom_data
-                pass
-            elif value is not None: # Add if not Python None (and not string "null")
-                final_cleaned_custom_data[key] = value
-            # Python None values are skipped and thus omitted.
-
-    # Ensure 'value' and 'currency' are correctly handled in final_cleaned_custom_data
-    if "value" in final_cleaned_custom_data:
+    # 2. Clean Custom Data
+    final_custom_data = {k: v for k, v in (payload.custom_data or {}).items() if v not in [None, "null", "NULL"]}
+    
+    # Standardize Value/Currency
+    if "value" in final_custom_data:
         try:
-            current_val = final_cleaned_custom_data["value"]
-            if current_val is not None and not isinstance(current_val, (int, float)):
-                final_cleaned_custom_data["value"] = float(current_val)
-            elif current_val is None:
-                 final_cleaned_custom_data["value"] = 0.0
+            final_custom_data["value"] = float(final_custom_data["value"])
         except (ValueError, TypeError):
-            if final_cleaned_custom_data.get("value") is not None:
-                logging.warning(f"Invalid value for 'custom_data.value': {final_cleaned_custom_data.get('value')}. Setting to 0.0")
-            final_cleaned_custom_data["value"] = 0.0
+            final_custom_data["value"] = 0.0
     
-    if "currency" in final_cleaned_custom_data:
-        current_curr = final_cleaned_custom_data["currency"]
-        if (current_curr is None or \
-            (isinstance(current_curr, str) and \
-             (current_curr.lower() == 'null' or current_curr == ""))):
-            final_cleaned_custom_data["currency"] = "SEK"
-    
-    # Omit any keys that might have become None during specific handling above (if any such logic was added)
-    # or were None initially and we want to ensure they are removed.
-    # The current loop logic already omits "null" strings and initial None values.
-    final_cleaned_custom_data = {k: v for k, v in final_cleaned_custom_data.items() if v is not None}
-    # --- END OF MODIFIED SECTION 5 ---
+    if "currency" not in final_custom_data:
+        final_custom_data["currency"] = "SEK" # Default currency
 
-    # 6) Build final Meta CAPI payload
-    meta_payload_user_data = {
-        "client_ip_address": client_ip if client_ip else None, # Send None if empty for Meta to handle
-        "client_user_agent": client_user_agent if client_user_agent else None, # Send None if empty
-        "fbc": fbc_val if fbc_val else None,
-        "fbp": fbp_val if fbp_val else None
+    # 3. Hash PII (Securely)
+    # Note: We use lists [] for these fields because Meta sometimes prefers arrays for matching, 
+    # though single strings are often accepted. Keeping it simple (string) works for most CAPI versions.
+    meta_user_data = {
+        "client_ip_address": payload_ip,
+        "client_user_agent": client_user_agent,
+        "fbc": fbc_val if fbc_val and fbc_val.lower() != "null" else None,
+        "fbp": fbp_val if fbp_val and FBP_REGEX.match(fbp_val) else None,
+        "em": hash_data(payload.user_data.get("email")),
+        "fn": hash_data(payload.user_data.get("first_name")),
+        "ln": hash_data(payload.user_data.get("last_name")),
+        "ph": hash_data(payload.user_data.get("phone")),
+        "ct": hash_data(payload.user_data.get("city")),
+        "zp": hash_data(payload.user_data.get("zip")),
+        "country": hash_data(payload.user_data.get("country")),
+        "external_id": hash_data(payload.user_data.get("external_id")) if payload.user_data.get("external_id") else None
     }
-    # Add hashed PII if present
-    if hashed_email: meta_payload_user_data["em"] = hashed_email
-    if hashed_first_name: meta_payload_user_data["fn"] = hashed_first_name
-    if hashed_last_name: meta_payload_user_data["ln"] = hashed_last_name
-    if hashed_phone: meta_payload_user_data["ph"] = hashed_phone
-    if hashed_country: meta_payload_user_data["country"] = hashed_country
-    if hashed_city: meta_payload_user_data["ct"] = hashed_city
-    if hashed_zip: meta_payload_user_data["zp"] = hashed_zip
     
-    # Remove None values from user_data for cleaner payload to Meta
-    meta_payload_user_data = {k: v for k, v in meta_payload_user_data.items() if v is not None}
+    # Clean empty values
+    meta_user_data = {k: v for k, v in meta_user_data.items() if v}
 
-    meta_payload_event_data = {
+    # 4. Construct Final Meta Payload
+    event_data = {
         "event_name": payload.event_name,
         "event_time": payload.event_time,
         "action_source": payload.action_source,
-        "user_data": meta_payload_user_data,
-        "custom_data": final_cleaned_custom_data # Use the fully cleaned custom_data
+        "user_data": meta_user_data,
+        "custom_data": final_custom_data,
     }
-
-    ghl_contact_id = payload.user_data.get("external_id", None) # Check if your JS sends this
-    if ghl_contact_id:
-        hashed_external_id = hash_data(ghl_contact_id)
-        meta_payload_event_data["user_data"]["external_id"] = hashed_external_id
-        logging.info("Included external_id (GHL Contact ID): %s", hashed_external_id)
 
     if payload.event_source_url:
-        meta_payload_event_data["event_source_url"] = payload.event_source_url
-
-    if event_id:
-        meta_payload_event_data["event_id"] = event_id
+        event_data["event_source_url"] = payload.event_source_url
     
-    meta_payload = {"data": [meta_payload_event_data]}
+    # *** DEDUPLICATION KEY ***
+    # This is the bridge. If the JS sends an ID, we pass it to Meta.
+    if payload.event_id:
+        event_data["event_id"] = payload.event_id
 
-    logging.info("Built Meta CAPI payload: %s", json.dumps(meta_payload, indent=2)) # Log the final payload
+    # 5. Assemble Request Wrapper
+    final_payload: Dict[str, Any] = {"data": [event_data]}
 
+    # *** TEST CODE LOGIC ***
+    # Priority: 1. Code sent in JSON (Postman) -> 2. Code set in Environment (.env/Render)
+    actual_test_code = test_event_code or ENV_TEST_CODE
+    
+    if actual_test_code:
+        final_payload["test_event_code"] = actual_test_code
+        logging.info(f"🧪 Sending TEST Event. Code: {actual_test_code}")
+
+    # 6. Dispatch
     try:
-        response = requests.post(CAPI_URL, json=meta_payload)
-        response.raise_for_status()
-        meta_response = response.json()
-        meta_status_code = response.status_code
-        logging.info("Meta CAPI response: %s", meta_response)
+        resp = requests.post(CAPI_URL, json=final_payload)
+        resp.raise_for_status()
+        return resp.json()
     except requests.exceptions.RequestException as e:
-        logging.error("Meta CAPI request failed: %s", str(e))
-        error_detail = f"Meta CAPI request failed: {str(e)}"
+        logging.error(f"Meta CAPI Error: {e}")
         if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_detail += f" - Response: {e.response.text}"
-            except Exception:
-                pass # Ignore if can't get response text
-        raise HTTPException(
-            status_code=500,
-            detail=error_detail
-        )
+             logging.error(f"Meta Response: {e.response.text}")
+        raise e
 
+# --- Endpoints ---
+
+@app.get("/health-check")
+def health_check():
     return {
-        "meta_response": {
-            "status_code": meta_status_code,
-            "response": meta_response
-        }
+        "status": "ok", 
+        "mode": "Test" if ENV_TEST_CODE else "Live",
+        "service": "Webinar Lead CAPI"
     }
+
+@app.post("/process-event")
+async def process_event(request: Request):
+    try:
+        raw_body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    # Detect Batch vs Single
+    if "data" in raw_body and isinstance(raw_body["data"], list):
+        try:
+            payload_obj = MetaTestPayload(**raw_body)
+            events = payload_obj.data
+            # Code from JSON payload (e.g. Postman)
+            t_code = payload_obj.test_event_code 
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+    else:
+        try:
+            payload_obj = ClientPayload(**raw_body)
+            events = [payload_obj]
+            t_code = None 
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+
+    results = []
+    for event in events:
+        try:
+            res = await _process_single_event(event, request, t_code)
+            results.append({"status": "sent_to_meta", "response": res})
+        except Exception as e:
+            results.append({"status": "error", "message": str(e)})
+
+    return {"results": results}
