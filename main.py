@@ -36,7 +36,8 @@ if not FB_PIXEL_ID or not FB_ACCESS_TOKEN:
 # API Version
 CAPI_URL = f"https://graph.facebook.com/v24.0/{FB_PIXEL_ID}/events?access_token={FB_ACCESS_TOKEN}"
 
-FBP_REGEX = re.compile(r'^fb\.1\.\d+\.\d+$')
+# Updated to allow letters in the final segment, just in case
+FBP_REGEX = re.compile(r'^fb\.1\.\d+\.[a-zA-Z0-9]+$')
 
 app = FastAPI()
 
