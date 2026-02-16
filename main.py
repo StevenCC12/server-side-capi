@@ -86,10 +86,27 @@ async def _process_single_event(payload: ClientPayload, request: Request, test_e
 
     # 2. Clean Custom Data
     final_custom_data = {k: v for k, v in (payload.custom_data or {}).items() if v not in [None, "null", "NULL"]}
+    
+    # LOGIC FIX: Handle Value/Currency strictly
     if "value" in final_custom_data:
-        try: final_custom_data["value"] = float(final_custom_data["value"])
-        except: final_custom_data["value"] = 0.0
-    if "currency" not in final_custom_data: final_custom_data["currency"] = "SEK"
+        try:
+            val = float(final_custom_data["value"])
+            # Meta Requirement: Value must be > 0. 
+            # If it's 0 or negative, we remove the key entirely to avoid the "Same Price" warning.
+            if val > 0:
+                final_custom_data["value"] = val
+            else:
+                final_custom_data.pop("value", None)
+                # If we remove value, we must also remove currency
+                final_custom_data.pop("currency", None)
+        except:
+            # If conversion fails, remove keys instead of defaulting to 0.0
+            final_custom_data.pop("value", None)
+            final_custom_data.pop("currency", None)
+
+    # Only set default currency if we actually have a valid value left
+    if "value" in final_custom_data and "currency" not in final_custom_data:
+        final_custom_data["currency"] = "SEK"
 
     # 3. Hash PII
     meta_user_data = {
