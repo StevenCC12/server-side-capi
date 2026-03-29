@@ -17,11 +17,9 @@ if os.getenv("RENDER") is None:
     load_dotenv()
 
 # --- ROBUST LOGGING CONFIGURATION ---
-# This setup ensures logs are visible in the Render console immediately.
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Create a handler for Standard Output
 handler = logging.StreamHandler(sys.stdout)
 handler.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
@@ -34,14 +32,12 @@ logger.addHandler(handler)
 # --- Configuration ---
 FB_PIXEL_ID = os.getenv("FB_PIXEL_ID")
 FB_ACCESS_TOKEN = os.getenv("FB_ACCESS_TOKEN")
-ENV_TEST_CODE = os.getenv("META_TEST_CODE") 
 
 CAPI_URL = f"https://graph.facebook.com/v24.0/{FB_PIXEL_ID}/events?access_token={FB_ACCESS_TOKEN}"
 FBP_REGEX = re.compile(r'^fb\.1\.\d+\.[a-zA-Z0-9]+$') 
 
 app = FastAPI()
 
-# Add your live domain here
 origins = [
     "https://summit.carlhelgesson.com",
     "http://localhost:8000",
@@ -87,24 +83,18 @@ async def _process_single_event(payload: ClientPayload, request: Request, test_e
     # 2. Clean Custom Data
     final_custom_data = {k: v for k, v in (payload.custom_data or {}).items() if v not in [None, "null", "NULL"]}
     
-    # LOGIC FIX: Handle Value/Currency strictly
     if "value" in final_custom_data:
         try:
             val = float(final_custom_data["value"])
-            # Meta Requirement: Value must be > 0. 
-            # If it's 0 or negative, we remove the key entirely to avoid the "Same Price" warning.
             if val > 0:
                 final_custom_data["value"] = val
             else:
                 final_custom_data.pop("value", None)
-                # If we remove value, we must also remove currency
                 final_custom_data.pop("currency", None)
         except:
-            # If conversion fails, remove keys instead of defaulting to 0.0
             final_custom_data.pop("value", None)
             final_custom_data.pop("currency", None)
 
-    # Only set default currency if we actually have a valid value left
     if "value" in final_custom_data and "currency" not in final_custom_data:
         final_custom_data["currency"] = "SEK"
 
@@ -134,30 +124,39 @@ async def _process_single_event(payload: ClientPayload, request: Request, test_e
 
     final_payload: Dict[str, Any] = {"data": [event_data]}
     
-    # Priority: Code from JSON > Code from Environment
-    actual_test_code = test_event_code or ENV_TEST_CODE
-    if actual_test_code:
-        final_payload["test_event_code"] = actual_test_code
+    # UPDATE 1: Only attach test code if explicitly passed in the JSON webhook payload
+    if test_event_code:
+        final_payload["test_event_code"] = test_event_code
+        logging.info(f"🚀 SENDING TEST EVENT TO META: Event ID {payload.event_id} | Test Code: {test_event_code}")
+    else:
+        logging.info(f"🚀 SENDING LIVE EVENT TO META: Event ID {payload.event_id} | No Test Code")
 
     # 5. Send to Meta
     try:
-        # We keep logging info here for consistency
-        logging.info(f"🚀 SENDING TO META: Event ID {payload.event_id} | Test Code: {actual_test_code}")
-        
         resp = requests.post(CAPI_URL, json=final_payload)
         resp.raise_for_status()
         
         logging.info(f"✅ META SUCCESS: {resp.json()}")
         return resp.json()
-    except Exception as e:
-        logging.error(f"❌ META ERROR: {str(e)}")
-        raise e
+        
+    # UPDATE 2: Catch requests exceptions specifically to extract Meta's error body
+    except requests.exceptions.RequestException as e:
+        error_details = str(e)
+        if e.response is not None:
+            try:
+                # Try to parse Meta's JSON error response
+                meta_error = e.response.json()
+                error_details = json.dumps(meta_error)
+            except ValueError:
+                # Fallback to plain text if it's not JSON
+                error_details = e.response.text
+                
+        logging.error(f"❌ META API REJECTED PAYLOAD: {error_details}")
+        raise HTTPException(status_code=400, detail=f"Meta API Error: {error_details}")
 
 # --- Endpoints ---
-
 @app.post("/process-event")
 async def process_event(request: Request):
-    # --- BRUTE FORCE DEBUGGING START ---
     print("👀 RECEIVED WEBHOOK REQUEST!", flush=True) 
     
     try:
@@ -166,7 +165,6 @@ async def process_event(request: Request):
     except Exception:
         print("❌ FAILED TO READ JSON", flush=True)
         raise HTTPException(status_code=400, detail="Invalid JSON")
-    # --- BRUTE FORCE DEBUGGING END ---
 
     # Detect Batch vs Single
     if "data" in raw_body and isinstance(raw_body["data"], list):
@@ -175,16 +173,15 @@ async def process_event(request: Request):
             events = payload_obj.data
             t_code = payload_obj.test_event_code 
         except ValidationError as e:
-            # Print specific validation errors too!
             print(f"❌ VALIDATION ERROR (Batch): {str(e)}", flush=True)
             raise HTTPException(status_code=422, detail=str(e))
     else:
         try:
             payload_obj = ClientPayload(**raw_body)
             events = [payload_obj]
+            # Since it's a single event structure without the outer wrapper, there is no test code
             t_code = None 
         except ValidationError as e:
-            # Print specific validation errors too!
             print(f"❌ VALIDATION ERROR (Single): {str(e)}", flush=True)
             raise HTTPException(status_code=422, detail=str(e))
 
@@ -193,6 +190,9 @@ async def process_event(request: Request):
         try:
             res = await _process_single_event(event, request, t_code)
             results.append({"status": "success", "response": res})
+        except HTTPException as e:
+            # We already logged the detailed error in _process_single_event
+            results.append({"status": "error", "message": e.detail})
         except Exception as e:
             print(f"❌ PROCESS ERROR: {str(e)}", flush=True)
             results.append({"status": "error", "message": str(e)})
@@ -202,4 +202,4 @@ async def process_event(request: Request):
 @app.get("/health-check")
 def health_check():
     print("💓 Health check heartbeat", flush=True)
-    return {"status": "ok", "mode": "Test" if ENV_TEST_CODE else "Live"}
+    return {"status": "ok", "mode": "Live"}
