@@ -112,13 +112,10 @@
 
   // --- 3. Global Event Delegation ---
   document.addEventListener("submit", function(e) {
-      // Check if the clicked element (or its parent) is the submit button
-      const targetButton = e.target.closest("button.button-element[type='submit']");
-      
-      if (targetButton) {
+      // Check if a form is being submitted
+      if (e.target && e.target.tagName === 'FORM') {
           // Fire Logic Passively
           fireLeadEvent();
       }
   }, true); // Capture phase
-
 })();
