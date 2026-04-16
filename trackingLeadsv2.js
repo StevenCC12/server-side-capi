@@ -72,7 +72,7 @@
       // --- DEDUPLICATION LOGIC STARTS HERE ---
       
       // 1. Generate a Unique Event ID
-      const eventId = 'lead_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      const eventId = 'lead_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
 
       // 2. Fire Browser Pixel (Client-Side) with the ID
       if (typeof fbq === 'function') {
