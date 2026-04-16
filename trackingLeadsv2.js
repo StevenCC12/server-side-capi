@@ -111,7 +111,7 @@
   }
 
   // --- 3. Global Event Delegation ---
-  document.addEventListener("click", function(e) {
+  document.addEventListener("submit", function(e) {
       // Check if the clicked element (or its parent) is the submit button
       const targetButton = e.target.closest("button.button-element[type='submit']");
       
