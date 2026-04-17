@@ -86,7 +86,7 @@ async def _process_single_event(payload: ClientPayload, request: Request, test_e
     if "value" in final_custom_data:
         try:
             val = float(final_custom_data["value"])
-            if val > 0:
+            if val >= 0:
                 final_custom_data["value"] = val
             else:
                 final_custom_data.pop("value", None)
