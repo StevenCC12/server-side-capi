@@ -65,9 +65,28 @@ class MetaTestPayload(BaseModel):
     data: List[ClientPayload]
     test_event_code: Optional[str] = None
 
-def hash_data(value: Optional[str]) -> str:
+def hash_data(value: Optional[str], format_type: str = "default") -> str:
+    """Normalizes and hashes data according to Meta's strict specifications."""
     if not value: return ""
-    return hashlib.sha256(str(value).strip().lower().encode()).hexdigest()
+    
+    val_str = str(value).strip().lower()
+    
+    # Meta-specific normalization rules
+    if format_type == "phone":
+        # Remove symbols, letters, and any leading zeros
+        val_str = re.sub(r'\D', '', val_str).lstrip('0')
+    elif format_type == "city":
+        # No punctuation, no special characters, no spaces
+        val_str = re.sub(r'[\W_]+', '', val_str)
+    elif format_type == "zip":
+        # No spaces, no dashes
+        val_str = val_str.replace(" ", "").replace("-", "")
+    elif format_type == "dob":
+        # Strip all punctuation to force YYYYMMDD if formatting included dashes/slashes
+        val_str = re.sub(r'\D', '', val_str)
+        
+    if not val_str: return ""
+    return hashlib.sha256(val_str.encode()).hexdigest()
 
 # --- Core Processor ---
 async def _process_single_event(payload: ClientPayload, request: Request, test_event_code: Optional[str] = None):
@@ -98,7 +117,7 @@ async def _process_single_event(payload: ClientPayload, request: Request, test_e
     if "value" in final_custom_data and "currency" not in final_custom_data:
         final_custom_data["currency"] = "SEK"
 
-    # 3. Hash PII
+    # 3. Hash PII (Updated to include full EMQ parameter mapping)
     meta_user_data = {
         "client_ip_address": client_ip,
         "client_user_agent": client_user_agent,
@@ -107,8 +126,17 @@ async def _process_single_event(payload: ClientPayload, request: Request, test_e
         "em": hash_data(payload.user_data.get("email")),
         "fn": hash_data(payload.user_data.get("first_name")),
         "ln": hash_data(payload.user_data.get("last_name")),
-        "ph": hash_data(payload.user_data.get("phone")),
+        "ph": hash_data(payload.user_data.get("phone"), format_type="phone"),
+        "ct": hash_data(payload.user_data.get("city"), format_type="city"),
+        "st": hash_data(payload.user_data.get("state")),
+        "zp": hash_data(payload.user_data.get("zip"), format_type="zip"),
+        "country": hash_data(payload.user_data.get("country")),
+        "external_id": hash_data(payload.user_data.get("external_id")),
+        "db": hash_data(payload.user_data.get("db") or payload.user_data.get("date_of_birth"), format_type="dob"),
+        "ge": hash_data(payload.user_data.get("ge") or payload.user_data.get("gender"))
     }
+    
+    # Strip out any keys where the value is empty/None
     meta_user_data = {k: v for k, v in meta_user_data.items() if v}
 
     # 4. Construct Payload
