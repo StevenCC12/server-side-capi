@@ -34,8 +34,7 @@
   }
 
   function sendEventToServer(payload) {
-      // REPLACE WITH YOUR PRODUCTION RENDER URL
-      const endpoint = "https://your-app-name.onrender.com/process-event"; 
+      const endpoint = "https://knaa-server-side-capi.onrender.com/process-event"; 
       
       // For local testing, you can swap back to:
       // const endpoint = "https://barratrous-uncontestablely-annie.ngrok-free.dev/process-event";
@@ -77,9 +76,7 @@
       // 2. Fire Browser Pixel (Client-Side) with the ID
       if (typeof fbq === 'function') {
           fbq('track', 'Lead', {
-              content_name: 'Webinar Opt-in',
-              currency: 'SEK',
-              value: 0.0
+              content_name: 'Webinar Opt-in', // Removed currency and 0.0 value that confuse Meta
           }, { eventID: eventId }); // <--- The Bridge
       }
 
@@ -100,9 +97,7 @@
               user_agent: navigator.userAgent
           },
           custom_data: {
-              ...utmData,
-              currency: "SEK",
-              value: 0.0
+              ...utmData, // Removed currency and 0.0 value that confuse Meta
           }
       };
       
