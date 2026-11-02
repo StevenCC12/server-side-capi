@@ -377,7 +377,9 @@ async def webhook_purchase(request: Request):
     client_ip = attribution.get("ip", "")
 
     # Detect purchase type from contact tags
-    contact_tags = [t.lower() if isinstance(t, str) else "" for t in (contact.get("tags") or [])]
+    raw_tags = contact.get("tags") or []
+    logging.info(f"🏷️ Raw tags for {email}: {raw_tags}")
+    contact_tags = [t.lower() if isinstance(t, str) else "" for t in raw_tags]
 
     if any("special deal" in tag for tag in contact_tags):
         logging.info(f"⏭️ Special deal tag found for {email} — skipping")
