@@ -376,20 +376,13 @@ async def webhook_purchase(request: Request):
     external_id = contact.get("id", "")
     client_ip = attribution.get("ip", "")
 
-    downsell = str(raw.get("downsell", "")).lower() in ("true", "1", "yes")
+    # Detect downsell from contact tags
+    contact_tags = [t.lower() if isinstance(t, str) else "" for t in (contact.get("tags") or [])]
+    downsell = any("downsell" in tag for tag in contact_tags)
 
-    lead_value = raw.get("lead_value")
-    if lead_value is not None:
-        try:
-            value = float(lead_value)
-        except (ValueError, TypeError):
-            value = PURCHASE_DOWNSELL_VALUE if downsell else PURCHASE_DEFAULT_VALUE
-    elif downsell:
-        value = PURCHASE_DOWNSELL_VALUE
-    else:
-        value = PURCHASE_DEFAULT_VALUE
-
+    value = PURCHASE_DOWNSELL_VALUE if downsell else PURCHASE_DEFAULT_VALUE
     event_source_url = PURCHASE_DOWNSELL_URL if downsell else PURCHASE_DEFAULT_URL
+    logging.info(f"{'📦 DOWNSELL' if downsell else '💰 PIF'} detected for {email} — {value} SEK")
 
     custom_data: Dict[str, Any] = {"currency": "SEK", "value": value}
     seg = raw.get("customer_segmentation")
