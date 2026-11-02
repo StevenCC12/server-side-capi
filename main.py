@@ -9,6 +9,7 @@ import os
 import re
 import json
 import ipaddress
+import time
 from typing import Optional, List, Dict, Any
 
 # --- Environment Setup ---
@@ -34,7 +35,17 @@ FB_PIXEL_ID = os.getenv("FB_PIXEL_ID")
 FB_ACCESS_TOKEN = os.getenv("FB_ACCESS_TOKEN")
 
 CAPI_URL = f"https://graph.facebook.com/v24.0/{FB_PIXEL_ID}/events?access_token={FB_ACCESS_TOKEN}"
-FBP_REGEX = re.compile(r'^fb\.1\.\d+\.[a-zA-Z0-9]+$') 
+FBP_REGEX = re.compile(r'^fb\.1\.\d+\.[a-zA-Z0-9]+$')
+
+# --- GHL / Purchase Webhook Config ---
+GHL_API_KEY = os.getenv("GHL_API_KEY")
+GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID")
+GHL_API_BASE = "https://services.leadconnectorhq.com"
+
+PURCHASE_DEFAULT_VALUE = 21997.00
+PURCHASE_DOWNSELL_VALUE = 4997.00
+PURCHASE_DEFAULT_URL = "https://checkout.knaa.se/order-page"
+PURCHASE_DOWNSELL_URL = "https://checkout.knaa.se/ds"
 
 app = FastAPI()
 
@@ -88,14 +99,90 @@ def hash_data(value: Optional[str], format_type: str = "default") -> str:
     if not val_str: return ""
     return hashlib.sha256(val_str.encode()).hexdigest()
 
+# --- GHL Helpers ---
+
+def _ghl_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {GHL_API_KEY}",
+        "Version": "2021-07-28",
+        "Accept": "application/json",
+    }
+
+def _lookup_ghl_contact(email: str = "", phone: str = "") -> Optional[dict]:
+    """Search GHL by email/phone, then fetch the full contact for attributionSource."""
+    if not GHL_API_KEY:
+        logging.warning("GHL_API_KEY not set — skipping CRM lookup")
+        return None
+
+    params: Dict[str, str] = {}
+    if GHL_LOCATION_ID:
+        params["locationId"] = GHL_LOCATION_ID
+    if email:
+        params["email"] = email.strip().lower()
+    elif phone:
+        params["phone"] = phone
+    else:
+        return None
+
+    try:
+        resp = requests.get(f"{GHL_API_BASE}/contacts/search/duplicate", headers=_ghl_headers(), params=params, timeout=15)
+        resp.raise_for_status()
+        contact = resp.json().get("contact")
+    except Exception as e:
+        logging.error(f"GHL search failed: {e}")
+        return None
+
+    if not contact:
+        logging.warning(f"No GHL contact found for: {email or phone}")
+        return None
+
+    contact_id = contact.get("id")
+    if not contact_id:
+        return contact
+
+    try:
+        resp = requests.get(f"{GHL_API_BASE}/contacts/{contact_id}", headers=_ghl_headers(), timeout=15)
+        resp.raise_for_status()
+        return resp.json().get("contact", contact)
+    except Exception as e:
+        logging.error(f"GHL contact fetch failed (falling back to search result): {e}")
+        return contact
+
+
+def _normalize_phone_e164(phone: str) -> str:
+    """Swedish local number → E.164 (+46...)."""
+    if not phone:
+        return ""
+    cleaned = re.sub(r"[\s\-\.\(\)]+", "", phone.strip())
+    if cleaned.startswith("0"):
+        cleaned = "+46" + cleaned[1:]
+    elif not cleaned.startswith("+") and cleaned.startswith("46"):
+        cleaned = "+" + cleaned
+    return cleaned
+
+
+def _resolve_fbc(attribution: dict) -> str:
+    """Return fbc if present, otherwise construct from fbclid."""
+    fbc = attribution.get("fbc")
+    if fbc:
+        return fbc
+    fbclid = attribution.get("fbclid")
+    if fbclid:
+        return f"fb.1.{int(time.time() * 1000)}.{fbclid}"
+    return ""
+
+
 # --- Core Processor ---
-async def _process_single_event(payload: ClientPayload, request: Request, test_event_code: Optional[str] = None):
+async def _process_single_event(payload: ClientPayload, request: Request, test_event_code: Optional[str] = None, client_ip_override: str = ""):
     # 1. Identity & Network Data
     fbc_val = payload.user_data.get("fbc")
     fbp_val = payload.user_data.get("fbp")
 
-    x_forwarded_for = request.headers.get("x-forwarded-for", "")
-    client_ip = x_forwarded_for.split(",")[0].strip() if x_forwarded_for else (request.client.host if request.client else "")
+    if client_ip_override:
+        client_ip = client_ip_override
+    else:
+        x_forwarded_for = request.headers.get("x-forwarded-for", "")
+        client_ip = x_forwarded_for.split(",")[0].strip() if x_forwarded_for else (request.client.host if request.client else "")
     
     client_user_agent = payload.user_data.get("user_agent") or request.headers.get("user-agent")
 
@@ -226,6 +313,81 @@ async def process_event(request: Request):
             results.append({"status": "error", "message": str(e)})
 
     return {"results": results}
+
+@app.post("/webhook/purchase")
+async def webhook_purchase(request: Request):
+    """GHL webhook → CRM lookup for attribution → Purchase event to Meta."""
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    logging.info(f"📥 PURCHASE WEBHOOK: {json.dumps(raw, default=str)[:500]}")
+
+    email = (raw.get("email") or "").strip().lower()
+    phone = raw.get("phone") or ""
+    if not email and not phone:
+        raise HTTPException(status_code=400, detail="email or phone is required")
+
+    contact = _lookup_ghl_contact(email=email, phone=phone)
+    if not contact:
+        raise HTTPException(status_code=404, detail=f"Contact not found in CRM for: {email or phone}")
+
+    attribution = contact.get("attributionSource") or {}
+    external_id = contact.get("id", "")
+    client_ip = attribution.get("ip", "")
+
+    downsell = str(raw.get("downsell", "")).lower() in ("true", "1", "yes")
+
+    lead_value = raw.get("lead_value")
+    if lead_value is not None:
+        try:
+            value = float(lead_value)
+        except (ValueError, TypeError):
+            value = PURCHASE_DOWNSELL_VALUE if downsell else PURCHASE_DEFAULT_VALUE
+    elif downsell:
+        value = PURCHASE_DOWNSELL_VALUE
+    else:
+        value = PURCHASE_DEFAULT_VALUE
+
+    event_source_url = PURCHASE_DOWNSELL_URL if downsell else PURCHASE_DEFAULT_URL
+
+    custom_data: Dict[str, Any] = {"currency": "SEK", "value": value}
+    seg = raw.get("customer_segmentation")
+    if seg:
+        custom_data["customer_segmentation"] = seg
+
+    payload = ClientPayload(
+        event_name="Purchase",
+        event_time=int(time.time()),
+        event_id=f"{external_id}-Purchase",
+        action_source="website",
+        event_source_url=event_source_url,
+        user_data={
+            "email": contact.get("email") or email,
+            "first_name": contact.get("firstName") or raw.get("first_name", ""),
+            "last_name": contact.get("lastName") or raw.get("last_name", ""),
+            "phone": _normalize_phone_e164(contact.get("phone") or phone),
+            "external_id": external_id,
+            "city": contact.get("city") or raw.get("city", ""),
+            "zip": (contact.get("postalCode") or raw.get("postal_code") or "").replace(" ", ""),
+            "country": (contact.get("country") or raw.get("country") or "se").lower(),
+            "fbc": _resolve_fbc(attribution),
+            "fbp": attribution.get("fbp") or "",
+            "user_agent": attribution.get("userAgent") or "",
+        },
+        custom_data=custom_data,
+    )
+
+    logging.info(f"🔄 PROCESSING PURCHASE: {external_id} | {payload.user_data['email']} | {value} SEK")
+
+    try:
+        result = await _process_single_event(payload, request, client_ip_override=client_ip)
+        return {"status": "success", "event_id": payload.event_id, "response": result}
+    except HTTPException as e:
+        logging.error(f"❌ PURCHASE FAILED: {e.detail}")
+        return {"status": "error", "event_id": payload.event_id, "message": e.detail}
+
 
 @app.get("/health-check")
 def health_check():
