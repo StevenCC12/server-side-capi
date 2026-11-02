@@ -376,8 +376,13 @@ async def webhook_purchase(request: Request):
     external_id = contact.get("id", "")
     client_ip = attribution.get("ip", "")
 
-    # Detect downsell from contact tags
+    # Detect purchase type from contact tags
     contact_tags = [t.lower() if isinstance(t, str) else "" for t in (contact.get("tags") or [])]
+
+    if any("special deal" in tag for tag in contact_tags):
+        logging.info(f"⏭️ Special deal tag found for {email} — skipping")
+        return {"status": "skipped", "reason": "Special deal — not PIF or downsell"}
+
     downsell = any("downsell" in tag for tag in contact_tags)
 
     value = PURCHASE_DOWNSELL_VALUE if downsell else PURCHASE_DEFAULT_VALUE
