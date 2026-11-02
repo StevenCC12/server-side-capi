@@ -10,6 +10,7 @@ import re
 import json
 import ipaddress
 import time
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 
 # --- Environment Setup ---
@@ -172,6 +173,41 @@ def _resolve_fbc(attribution: dict) -> str:
     return ""
 
 
+ATTRIBUTION_WINDOW_DAYS = 30
+
+def _is_within_attribution_window(raw_webhook: dict, ghl_contact: dict) -> bool:
+    """Check if the contact was created within the 30-day attribution window."""
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=ATTRIBUTION_WINDOW_DAYS)
+
+    # Try webhook date_created (unix timestamp or ISO string)
+    date_val = raw_webhook.get("date_created") or ghl_contact.get("dateAdded") or ghl_contact.get("dateCreated")
+    if not date_val:
+        logging.warning("No creation date found — allowing event (cannot verify window)")
+        return True
+
+    try:
+        if isinstance(date_val, (int, float)):
+            created = datetime.fromtimestamp(date_val, tz=timezone.utc)
+        else:
+            cleaned = str(date_val).replace("Z", "+00:00")
+            created = datetime.fromisoformat(cleaned)
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError, OSError) as e:
+        logging.warning(f"Could not parse creation date '{date_val}': {e} — allowing event")
+        return True
+
+    if created >= cutoff:
+        days_ago = (now - created).days
+        logging.info(f"✅ Contact created {days_ago} days ago — within {ATTRIBUTION_WINDOW_DAYS}-day window")
+        return True
+    else:
+        days_ago = (now - created).days
+        logging.info(f"⏭️ Contact created {days_ago} days ago — outside {ATTRIBUTION_WINDOW_DAYS}-day window, skipping")
+        return False
+
+
 # --- Core Processor ---
 async def _process_single_event(payload: ClientPayload, request: Request, test_event_code: Optional[str] = None, client_ip_override: str = ""):
     # 1. Identity & Network Data
@@ -332,6 +368,9 @@ async def webhook_purchase(request: Request):
     contact = _lookup_ghl_contact(email=email, phone=phone)
     if not contact:
         raise HTTPException(status_code=404, detail=f"Contact not found in CRM for: {email or phone}")
+
+    if not _is_within_attribution_window(raw, contact):
+        return {"status": "skipped", "reason": f"Contact older than {ATTRIBUTION_WINDOW_DAYS} days"}
 
     attribution = contact.get("attributionSource") or {}
     external_id = contact.get("id", "")
