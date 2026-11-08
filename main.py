@@ -677,14 +677,19 @@ async def webhook_new_contact(request: Request):
 
     if "firstName" in updates or "lastName" in updates:
         tags_to_add.append("name-corrected")
+        logging.info(f"[CORRECTION] NAME {contact_id}: "
+                     f"{corrections.get('firstName', {}).get('from', '')} → {corrections.get('firstName', {}).get('to', '')} | "
+                     f"{corrections.get('lastName', {}).get('from', '')} → {corrections.get('lastName', {}).get('to', '')}")
 
     # 2. Email domain correction
     if email:
         fixed_email, corrected_domain = _fix_email_domain(email)
         if corrected_domain:
-            corrections["emailDomain"] = {"from": email.rsplit("@", 1)[1], "to": corrected_domain}
+            original_domain = email.rsplit("@", 1)[1]
+            corrections["emailDomain"] = {"from": original_domain, "to": corrected_domain}
             email = fixed_email
             tags_to_add.append("email-corrected")
+            logging.info(f"[CORRECTION] DOMAIN {contact_id}: {original_domain} → {corrected_domain}")
 
         # 3. Email local part validation (uses corrected names for comparison)
         local_check = _check_email_local_part(email, first_name, last_name)
@@ -692,14 +697,17 @@ async def webhook_new_contact(request: Request):
 
         if local_check["action"] == "auto-correct":
             domain = email.rsplit("@", 1)[1]
+            original_local = email.rsplit("@", 1)[0]
             email = f"{local_check['suggested_local']}@{domain}"
             if "email-corrected" not in tags_to_add:
                 tags_to_add.append("email-corrected")
+            logging.info(f"[CORRECTION] LOCAL {contact_id}: {original_local} → {local_check['suggested_local']} ({local_check.get('details', '')})")
 
         elif local_check["action"] == "flag":
             domain = email.rsplit("@", 1)[1]
             suggested = f"{local_check['suggested_local']}@{domain}"
             tags_to_add.append("email-review-needed")
+            logging.info(f"[CORRECTION] FLAGGED {contact_id}: {email} — suggested {suggested} ({local_check.get('details', '')})")
             notes.append(
                 f"⚠️ Possible email typo detected:\n"
                 f"Current: {email}\n"
