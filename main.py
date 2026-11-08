@@ -41,7 +41,22 @@ FBP_REGEX = re.compile(r'^fb\.1\.\d+\.[a-zA-Z0-9]+$')
 # --- GHL / Purchase Webhook Config ---
 GHL_API_KEY = os.getenv("GHL_API_KEY")
 GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID")
+GHL_API_KEY_MARIA = os.getenv("GHL_API_KEY_MARIA")
+GHL_LOCATION_ID_MARIA = os.getenv("GHL_LOCATION_ID_MARIA")
 GHL_API_BASE = "https://services.leadconnectorhq.com"
+
+MONTHLY_ITERATION_SHEET_ID = "1iJKkTG6Svo0r3kENdZDONXSs1nDDwDCJogLbFPDVyj8"
+
+SWEDISH_DAYS = ["måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag", "söndag"]
+SWEDISH_MONTHS = ["jan", "feb", "mar", "apr", "maj", "jun", "jul", "aug", "sep", "okt", "nov", "dec"]
+ENGLISH_MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+GHL_LOCATIONS = [
+    {"name": "carl", "location_id": GHL_LOCATION_ID, "api_key": GHL_API_KEY},
+    {"name": "maria", "location_id": GHL_LOCATION_ID_MARIA, "api_key": GHL_API_KEY_MARIA},
+]
+
+ROLLOVER_TAGS_TO_REMOVE = ["currently registered", "dragning"]
 
 PURCHASE_DEFAULT_VALUE = 21997.00
 PURCHASE_DOWNSELL_VALUE = 4997.00
@@ -741,6 +756,235 @@ async def webhook_new_contact(request: Request):
 
     logging.info(f"📋 Validation complete for {contact_id}: {json.dumps(result, default=str)}")
     return result
+
+
+# --- Monthly Rollover Helpers ---
+
+def _get_custom_values(location_id: str, api_key: str) -> list:
+    resp = requests.get(
+        f"{GHL_API_BASE}/locations/{location_id}/customValues",
+        headers={"Authorization": f"Bearer {api_key}", "Version": "2021-07-28", "Accept": "application/json"},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return resp.json().get("customValues", [])
+
+
+def _update_custom_value(location_id: str, value_id: str, name: str, value: str, api_key: str) -> bool:
+    try:
+        resp = requests.put(
+            f"{GHL_API_BASE}/locations/{location_id}/customValues/{value_id}",
+            headers={"Authorization": f"Bearer {api_key}", "Version": "2021-07-28",
+                     "Accept": "application/json", "Content-Type": "application/json"},
+            json={"name": name, "value": value}, timeout=15,
+        )
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        logging.error(f"Failed to update custom value '{name}': {e}")
+        return False
+
+
+def _search_contacts_by_tag(tag: str, location_id: str, api_key: str) -> list:
+    headers = {"Authorization": f"Bearer {api_key}", "Version": "v3",
+               "Accept": "application/json", "Content-Type": "application/json"}
+    contacts = []
+    search_after = None
+    while True:
+        body: Dict[str, Any] = {
+            "locationId": location_id,
+            "pageLimit": 500,
+            "filters": [{"field": "tags", "operator": "eq", "value": tag}],
+            "fastPagination": True,
+        }
+        if search_after:
+            body["searchAfter"] = search_after
+        else:
+            body["page"] = 1
+
+        resp = requests.post(f"{GHL_API_BASE}/contacts/search", headers=headers, json=body, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        batch = data.get("contacts", [])
+        if not batch:
+            break
+        contacts.extend(batch)
+        if not data.get("hasMore", False):
+            break
+        search_after = batch[-1].get("searchAfter")
+        if not search_after:
+            break
+    return contacts
+
+
+def _remove_tag_from_contact(contact_id: str, tag: str, api_key: str) -> bool:
+    try:
+        resp = requests.delete(
+            f"{GHL_API_BASE}/contacts/{contact_id}/tags",
+            headers={"Authorization": f"Bearer {api_key}", "Version": "v3",
+                     "Accept": "application/json", "Content-Type": "application/json"},
+            json={"tags": [tag]}, timeout=15,
+        )
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        logging.error(f"Failed to remove tag '{tag}' from {contact_id}: {e}")
+        return False
+
+
+def _remove_tag_from_all_contacts(tag: str, location_id: str, api_key: str, location_name: str) -> dict:
+    contacts = _search_contacts_by_tag(tag, location_id, api_key)
+    removed, failed = 0, 0
+    for i, c in enumerate(contacts):
+        if _remove_tag_from_contact(c["id"], tag, api_key):
+            removed += 1
+        else:
+            failed += 1
+        if (i + 1) % 80 == 0:
+            time.sleep(1)
+    logging.info(f"[ROLLOVER] {location_name} tag '{tag}': {removed}/{len(contacts)} removed")
+    return {"found": len(contacts), "removed": removed, "failed": failed}
+
+
+@app.post("/admin/monthly-rollover")
+async def monthly_rollover(request: Request):
+    """One-click monthly rollover: update custom values, strip tags, create sheet tab."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    summit_date_str = body.get("summit_start_date")
+    if not summit_date_str:
+        raise HTTPException(status_code=400, detail="summit_start_date is required (YYYY-MM-DD)")
+    try:
+        from datetime import date as date_type
+        summit_date = datetime.strptime(summit_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="summit_start_date must be YYYY-MM-DD format")
+
+    summit_overlap = body.get("summit_overlap", False)
+    bonus_value = body.get("bonus_value")
+    dry_run = body.get("dry_run", True)
+
+    month_swe = SWEDISH_MONTHS[summit_date.month - 1]
+    day_1_date = str(summit_date.day)
+    day_1_day = SWEDISH_DAYS[summit_date.weekday()]
+    day_3_date = str((summit_date + timedelta(days=2)).day)
+    day_5_date = str((summit_date + timedelta(days=4)).day)
+    sheet_tab = ENGLISH_MONTHS_SHORT[summit_date.month - 1]
+    overlap_str = "TRUE" if summit_overlap else "FALSE"
+
+    logging.info(f"{'[DRY RUN]' if dry_run else '[LIVE]'} Monthly rollover: "
+                 f"{month_swe} {day_1_date} ({day_1_day}) overlap={overlap_str}")
+
+    calculated = {
+        "month": month_swe, "day_1_date": day_1_date, "day_1_day": day_1_day,
+        "day_3_date": day_3_date, "day_5_date": day_5_date,
+        "overlap": overlap_str, "sheet_tab": sheet_tab,
+    }
+    results: Dict[str, Any] = {"dry_run": dry_run, "calculated": calculated, "carl": {}, "maria": {}}
+
+    carl_custom_value_updates = {
+        "CURRENT_SUMMIT_MONTH": month_swe,
+        "CURRENT_SUMMIT_DAY_1_DATE": day_1_date,
+        "CURRENT_SUMMIT_DAY_1_DAY": day_1_day,
+        "CURRENT_SUMMIT_DAY_3_DATE": day_3_date,
+        "CURRENT_SUMMIT_DAY_5_DATE": day_5_date,
+        "CURRENT_SUMMIT_OVERLAP_IN_MONTH": overlap_str,
+    }
+    if bonus_value:
+        carl_custom_value_updates["CURRENT_SUMMIT_BONUS_VALUE"] = bonus_value
+
+    maria_custom_value_updates = {
+        "LATE_REGISTRATION_PERIOD": "FALSE",
+    }
+
+    # --- DRY RUN: show what would happen ---
+    if dry_run:
+        for loc in GHL_LOCATIONS:
+            if not loc["api_key"]:
+                results[loc["name"]] = {"error": "API key not configured"}
+                continue
+            try:
+                cv_list = _get_custom_values(loc["location_id"], loc["api_key"])
+                relevant = {cv["name"]: cv["value"] for cv in cv_list
+                            if "SUMMIT" in cv["name"].upper() or "LATE_REGISTRATION" in cv["name"].upper()}
+                results[loc["name"]]["current_values"] = relevant
+            except Exception as e:
+                results[loc["name"]]["values_error"] = str(e)
+
+            tag_counts = {}
+            for tag in ROLLOVER_TAGS_TO_REMOVE:
+                try:
+                    contacts = _search_contacts_by_tag(tag, loc["location_id"], loc["api_key"])
+                    tag_counts[tag] = len(contacts)
+                except Exception as e:
+                    tag_counts[tag] = f"error: {e}"
+            results[loc["name"]]["contacts_to_untag"] = tag_counts
+
+        updates_preview = {"carl": carl_custom_value_updates, "maria": maria_custom_value_updates}
+        results["planned_updates"] = updates_preview
+        results["planned_sheet_tab"] = sheet_tab
+        return results
+
+    # --- LIVE EXECUTION ---
+
+    # 1. Carl's custom values
+    try:
+        carl_cv = _get_custom_values(GHL_LOCATION_ID, GHL_API_KEY)
+        carl_cv_map = {cv["name"]: cv for cv in carl_cv}
+        cv_results = {}
+        for name, new_val in carl_custom_value_updates.items():
+            cv = carl_cv_map.get(name)
+            if not cv:
+                cv_results[name] = "not found"
+                continue
+            old_val = cv["value"]
+            ok = _update_custom_value(GHL_LOCATION_ID, cv["id"], name, new_val, GHL_API_KEY)
+            cv_results[name] = f"{old_val} -> {new_val}" if ok else f"FAILED ({old_val} -> {new_val})"
+        results["carl"]["custom_values"] = cv_results
+    except Exception as e:
+        results["carl"]["custom_values_error"] = str(e)
+
+    # 2. Maria's custom values
+    if GHL_API_KEY_MARIA and GHL_LOCATION_ID_MARIA:
+        try:
+            maria_cv = _get_custom_values(GHL_LOCATION_ID_MARIA, GHL_API_KEY_MARIA)
+            maria_cv_map = {cv["name"]: cv for cv in maria_cv}
+            cv_results = {}
+            for name, new_val in maria_custom_value_updates.items():
+                cv = maria_cv_map.get(name)
+                if not cv:
+                    cv_results[name] = "not found"
+                    continue
+                old_val = cv["value"]
+                ok = _update_custom_value(GHL_LOCATION_ID_MARIA, cv["id"], name, new_val, GHL_API_KEY_MARIA)
+                cv_results[name] = f"{old_val} -> {new_val}" if ok else f"FAILED ({old_val} -> {new_val})"
+            results["maria"]["custom_values"] = cv_results
+        except Exception as e:
+            results["maria"]["custom_values_error"] = str(e)
+
+    # 3. Remove tags from all contacts (both locations)
+    for loc in GHL_LOCATIONS:
+        if not loc["api_key"]:
+            results[loc["name"]]["tags"] = "API key not configured"
+            continue
+        tag_results = {}
+        for tag in ROLLOVER_TAGS_TO_REMOVE:
+            try:
+                tag_results[tag] = _remove_tag_from_all_contacts(
+                    tag, loc["location_id"], loc["api_key"], loc["name"])
+            except Exception as e:
+                tag_results[tag] = f"error: {e}"
+        results[loc["name"]]["tags"] = tag_results
+
+    # 4. Sheet tab creation (logged — automated via Google Sheets API separately)
+    results["sheet"] = {"tab_name": sheet_tab, "spreadsheet_id": MONTHLY_ITERATION_SHEET_ID,
+                        "note": "Create tab via Google Sheets API or MCP tools"}
+
+    logging.info(f"[ROLLOVER] Complete: {json.dumps(results, default=str)[:2000]}")
+    return results
 
 
 @app.get("/health-check")
