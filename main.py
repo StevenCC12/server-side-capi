@@ -389,6 +389,80 @@ def _add_ghl_note(contact_id: str, body: str) -> bool:
         return False
 
 
+def _sync_contact_to_maria(first_name: str, last_name: str, email: str, phone: str = "") -> Dict[str, Any]:
+    """Sync a cleaned contact to Maria's CRM. Creates if not found, adds 'currently registered' tag."""
+    if not GHL_API_KEY_MARIA or not GHL_LOCATION_ID_MARIA:
+        logging.warning("Maria CRM credentials not configured — skipping sync")
+        return {"status": "skipped", "reason": "maria_credentials_not_set"}
+
+    maria_headers = {
+        "Authorization": f"Bearer {GHL_API_KEY_MARIA}",
+        "Version": "2021-07-28",
+        "Accept": "application/json",
+    }
+
+    # 1. Search for existing contact by email
+    contact_id = None
+    try:
+        resp = requests.get(
+            f"{GHL_API_BASE}/contacts/search/duplicate",
+            headers=maria_headers,
+            params={"locationId": GHL_LOCATION_ID_MARIA, "email": email},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        existing = resp.json().get("contact")
+        if existing:
+            contact_id = existing.get("id")
+            logging.info(f"👥 Maria CRM: contact exists ({contact_id}) for {email}")
+    except Exception as e:
+        logging.error(f"❌ Maria CRM lookup failed for {email}: {e}")
+        return {"status": "error", "step": "lookup", "error": str(e)}
+
+    # 2. Create contact if not found
+    created = False
+    if not contact_id:
+        try:
+            create_body: Dict[str, str] = {
+                "firstName": first_name,
+                "lastName": last_name,
+                "email": email,
+                "locationId": GHL_LOCATION_ID_MARIA,
+            }
+            if phone:
+                create_body["phone"] = phone
+            resp = requests.post(
+                f"{GHL_API_BASE}/contacts/",
+                headers={**maria_headers, "Content-Type": "application/json"},
+                json=create_body,
+                timeout=15,
+            )
+            resp.raise_for_status()
+            contact_id = resp.json().get("contact", {}).get("id")
+            created = True
+            logging.info(f"✅ Maria CRM: created contact {contact_id} for {first_name} {last_name} ({email})")
+        except Exception as e:
+            logging.error(f"❌ Maria CRM contact creation failed for {email}: {e}")
+            return {"status": "error", "step": "create", "error": str(e)}
+
+    # 3. Add "currently registered" tag to trigger Maria's workflow
+    if contact_id:
+        try:
+            resp = requests.post(
+                f"{GHL_API_BASE}/contacts/{contact_id}/tags",
+                headers={**maria_headers, "Version": "v3", "Content-Type": "application/json"},
+                json={"tags": ["currently registered"]},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            logging.info(f"🏷️ Maria CRM: tagged {contact_id} 'currently registered'")
+        except Exception as e:
+            logging.error(f"❌ Maria CRM tag failed for {contact_id}: {e}")
+            return {"status": "partial", "contact_id": contact_id, "created": created, "tag_error": str(e)}
+
+    return {"status": "synced", "contact_id": contact_id, "created": created}
+
+
 ATTRIBUTION_WINDOW_DAYS = 30
 
 def _is_within_attribution_window(raw_webhook: dict, ghl_contact: dict) -> bool:
@@ -753,6 +827,10 @@ async def webhook_new_contact(request: Request):
 
     for note in notes:
         result["note_added"] = _add_ghl_note(contact_id, note)
+
+    # 5. Sync cleaned contact to Maria's CRM
+    phone = (contact_data.get("phone") or "").strip()
+    result["maria_sync"] = _sync_contact_to_maria(first_name, last_name, email, phone)
 
     logging.info(f"📋 Validation complete for {contact_id}: {json.dumps(result, default=str)}")
     return result
