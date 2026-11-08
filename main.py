@@ -173,6 +173,207 @@ def _resolve_fbc(attribution: dict) -> str:
     return ""
 
 
+# --- Contact Data Validation ---
+
+NAME_PARTICLES = {"von", "van", "de", "du", "af", "av", "der", "den", "di", "el", "la", "le"}
+
+
+def _capitalize_name_part(part: str, is_first_word: bool) -> str:
+    lower = part.lower()
+    if not lower:
+        return part
+    if lower in NAME_PARTICLES and not is_first_word:
+        return lower
+    if "'" in lower and len(lower) > 2:
+        idx = lower.index("'")
+        return lower[:idx].capitalize() + "'" + lower[idx + 1:].capitalize()
+    if lower.startswith("mc") and len(lower) > 3:
+        return "Mc" + lower[2:].capitalize()
+    return part.capitalize()
+
+
+def _capitalize_name(name: str) -> str:
+    if not name or not name.strip():
+        return name or ""
+    words = name.strip().split()
+    result = []
+    for i, word in enumerate(words):
+        subparts = word.split("-")
+        capitalized = "-".join(
+            _capitalize_name_part(sub, is_first_word=(i == 0 and j == 0))
+            for j, sub in enumerate(subparts)
+        )
+        result.append(capitalized)
+    return " ".join(result)
+
+
+def _levenshtein(s1: str, s2: str) -> int:
+    if len(s1) < len(s2):
+        return _levenshtein(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    prev = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        curr = [i + 1]
+        for j, c2 in enumerate(s2):
+            curr.append(min(curr[j] + 1, prev[j + 1] + 1, prev[j] + (0 if c1 == c2 else 1)))
+        prev = curr
+    return prev[-1]
+
+
+DOMAIN_TYPOS: Dict[str, str] = {
+    "gmai.com": "gmail.com", "gmial.com": "gmail.com", "gmal.com": "gmail.com",
+    "gnail.com": "gmail.com", "gmil.com": "gmail.com", "gmsil.com": "gmail.com",
+    "gmali.com": "gmail.com", "gmaol.com": "gmail.com", "gamil.com": "gmail.com",
+    "gmaill.com": "gmail.com", "fmail.com": "gmail.com", "gmaik.com": "gmail.com",
+    "gmaul.com": "gmail.com", "gimail.com": "gmail.com", "gemail.com": "gmail.com",
+    "gail.com": "gmail.com", "gmaiil.com": "gmail.com",
+    "gmail.co": "gmail.com", "gmail.vom": "gmail.com", "gmail.con": "gmail.com",
+    "gmail.comn": "gmail.com",
+    "hotmai.com": "hotmail.com", "hotmal.com": "hotmail.com", "hotmial.com": "hotmail.com",
+    "hotmil.com": "hotmail.com", "hotmaill.com": "hotmail.com", "htmail.com": "hotmail.com",
+    "homail.com": "hotmail.com", "hotmaul.com": "hotmail.com", "hotamil.com": "hotmail.com",
+    "hotmail.con": "hotmail.com", "hotmail.vom": "hotmail.com", "hotmail.co": "hotmail.com",
+    "hotmai.se": "hotmail.se", "hotmal.se": "hotmail.se",
+    "outlok.com": "outlook.com", "outloo.com": "outlook.com", "outllook.com": "outlook.com",
+    "outlokk.com": "outlook.com", "outloook.com": "outlook.com",
+    "outlook.con": "outlook.com", "outlook.vom": "outlook.com",
+    "yaho.com": "yahoo.com", "yahooo.com": "yahoo.com", "yhoo.com": "yahoo.com",
+    "yaoo.com": "yahoo.com", "yahho.com": "yahoo.com",
+    "yahoo.con": "yahoo.com", "yahoo.vom": "yahoo.com",
+    "iclould.com": "icloud.com", "iclod.com": "icloud.com", "icoud.com": "icloud.com",
+    "icloud.con": "icloud.com",
+    "live.con": "live.com", "live.vom": "live.com",
+}
+
+KNOWN_DOMAINS = {
+    "gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "icloud.com",
+    "live.com", "live.se", "hotmail.se", "outlook.se", "yahoo.se",
+    "msn.com", "aol.com", "protonmail.com", "proton.me", "me.com",
+    "mail.com", "zoho.com", "telia.com", "bredband.net", "comhem.se",
+    "spray.se", "pm.me", "mac.com", "ymail.com", "gmx.com", "gmx.de",
+    "web.de", "fastmail.com", "tutanota.com", "tuta.com",
+}
+
+FUZZY_DOMAINS = [
+    "gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "icloud.com",
+    "live.com", "live.se", "hotmail.se", "outlook.se", "yahoo.se",
+    "protonmail.com", "proton.me",
+]
+
+
+def _fix_email_domain(email: str) -> tuple:
+    if "@" not in email:
+        return email, None
+    local, domain = email.rsplit("@", 1)
+    domain_lower = domain.lower()
+
+    if domain_lower in DOMAIN_TYPOS:
+        fixed = DOMAIN_TYPOS[domain_lower]
+        return f"{local}@{fixed}", fixed
+
+    if domain_lower not in KNOWN_DOMAINS:
+        for known in FUZZY_DOMAINS:
+            if _levenshtein(domain_lower, known) == 1:
+                return f"{local}@{known}", known
+
+    return email, None
+
+
+def _check_email_local_part(email: str, first_name: str, last_name: str) -> dict:
+    if "@" not in email or not first_name or not last_name:
+        return {"action": "ok"}
+
+    local = email.rsplit("@", 1)[0].lower().strip()
+    fn = first_name.lower().strip()
+    ln = last_name.lower().strip()
+
+    if len(fn) < 2 or len(ln) < 2 or len(local) < 2:
+        return {"action": "ok"}
+
+    patterns = [
+        f"{fn}.{ln}", f"{fn}-{ln}", f"{fn}_{ln}", f"{fn}{ln}",
+        f"{ln}.{fn}", f"{ln}-{fn}", f"{ln}_{fn}", f"{ln}{fn}",
+        fn,
+    ]
+
+    best_dist = float("inf")
+    best_pattern = ""
+    for pattern in patterns:
+        dist = _levenshtein(local, pattern)
+        if dist < best_dist:
+            best_dist = dist
+            best_pattern = pattern
+
+    if best_dist == 1:
+        return {"action": "auto-correct", "suggested_local": best_pattern,
+                "details": f"'{local}' → '{best_pattern}' (distance=1)"}
+    if best_dist == 2:
+        return {"action": "flag", "suggested_local": best_pattern,
+                "details": f"'{local}' → '{best_pattern}'? (distance=2)"}
+
+    return {"action": "ok"}
+
+
+def _ghl_headers_v3() -> dict:
+    return {
+        "Authorization": f"Bearer {GHL_API_KEY}",
+        "Version": "v3",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+
+def _update_ghl_contact(contact_id: str, updates: dict) -> bool:
+    if not updates or not GHL_API_KEY:
+        return False
+    try:
+        resp = requests.put(
+            f"{GHL_API_BASE}/contacts/{contact_id}",
+            headers={**_ghl_headers(), "Content-Type": "application/json"},
+            json=updates, timeout=15,
+        )
+        resp.raise_for_status()
+        logging.info(f"✅ Contact {contact_id} updated: {list(updates.keys())}")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Contact update failed for {contact_id}: {e}")
+        return False
+
+
+def _add_ghl_tags(contact_id: str, tags: list) -> bool:
+    if not tags or not GHL_API_KEY:
+        return False
+    try:
+        resp = requests.post(
+            f"{GHL_API_BASE}/contacts/{contact_id}/tags",
+            headers=_ghl_headers_v3(), json={"tags": tags}, timeout=15,
+        )
+        resp.raise_for_status()
+        logging.info(f"🏷️ Tags added to {contact_id}: {tags}")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Tag addition failed for {contact_id}: {e}")
+        return False
+
+
+def _add_ghl_note(contact_id: str, body: str) -> bool:
+    if not body or not GHL_API_KEY:
+        return False
+    try:
+        resp = requests.post(
+            f"{GHL_API_BASE}/contacts/{contact_id}/notes",
+            headers={**_ghl_headers(), "Content-Type": "application/json"},
+            json={"body": body}, timeout=15,
+        )
+        resp.raise_for_status()
+        logging.info(f"📝 Note added to {contact_id}")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Note addition failed for {contact_id}: {e}")
+        return False
+
+
 ATTRIBUTION_WINDOW_DAYS = 30
 
 def _is_within_attribution_window(raw_webhook: dict, ghl_contact: dict) -> bool:
@@ -426,6 +627,104 @@ async def webhook_purchase(request: Request):
     except HTTPException as e:
         logging.error(f"❌ PURCHASE FAILED: {e.detail}")
         return {"status": "error", "event_id": payload.event_id, "message": e.detail}
+
+
+@app.post("/webhook/new-contact")
+async def webhook_new_contact(request: Request):
+    """GHL ContactCreate webhook → validate names and email, update contact."""
+    try:
+        raw = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    logging.info(f"📥 NEW CONTACT WEBHOOK: {json.dumps(raw, default=str)[:500]}")
+
+    contact_id = raw.get("id") or raw.get("contactId") or (raw.get("contact") or {}).get("id")
+    if not contact_id:
+        raise HTTPException(status_code=400, detail="Missing contact ID")
+
+    contact_data = raw.get("contact") or raw
+    first_name = contact_data.get("firstName") or contact_data.get("first_name") or ""
+    last_name = contact_data.get("lastName") or contact_data.get("last_name") or ""
+    email = (contact_data.get("email") or "").strip().lower()
+
+    corrections: Dict[str, Any] = {}
+    updates: Dict[str, str] = {}
+    tags_to_add: List[str] = []
+    notes: List[str] = []
+
+    # 1. Name capitalization
+    if first_name:
+        fixed_fn = _capitalize_name(first_name)
+        if fixed_fn != first_name:
+            corrections["firstName"] = {"from": first_name, "to": fixed_fn}
+            updates["firstName"] = fixed_fn
+            first_name = fixed_fn
+
+    if last_name:
+        fixed_ln = _capitalize_name(last_name)
+        if fixed_ln != last_name:
+            corrections["lastName"] = {"from": last_name, "to": fixed_ln}
+            updates["lastName"] = fixed_ln
+            last_name = fixed_ln
+
+    if "firstName" in updates or "lastName" in updates:
+        tags_to_add.append("name-corrected")
+
+    # 2. Email domain correction
+    if email:
+        fixed_email, corrected_domain = _fix_email_domain(email)
+        if corrected_domain:
+            corrections["emailDomain"] = {"from": email.rsplit("@", 1)[1], "to": corrected_domain}
+            email = fixed_email
+            tags_to_add.append("email-domain-corrected")
+
+        # 3. Email local part validation (uses corrected names for comparison)
+        local_check = _check_email_local_part(email, first_name, last_name)
+        corrections["emailLocalPart"] = local_check
+
+        if local_check["action"] == "auto-correct":
+            domain = email.rsplit("@", 1)[1]
+            email = f"{local_check['suggested_local']}@{domain}"
+            tags_to_add.append("email-local-corrected")
+
+        elif local_check["action"] == "flag":
+            domain = email.rsplit("@", 1)[1]
+            suggested = f"{local_check['suggested_local']}@{domain}"
+            tags_to_add.append("email-review-needed")
+            notes.append(
+                f"⚠️ Possible email typo detected:\n"
+                f"Current: {email}\n"
+                f"Suggested: {suggested}\n"
+                f"Details: {local_check['details']}\n"
+                f"Contact: {first_name} {last_name}"
+            )
+
+        if email != (contact_data.get("email") or "").strip().lower():
+            updates["email"] = email
+
+    # 4. Apply updates
+    result: Dict[str, Any] = {
+        "status": "success",
+        "contactId": contact_id,
+        "corrections": corrections,
+        "tags_added": tags_to_add,
+    }
+
+    if updates:
+        result["contact_updated"] = _update_ghl_contact(contact_id, updates)
+    else:
+        result["contact_updated"] = False
+        logging.info(f"✨ No corrections needed for {contact_id}")
+
+    if tags_to_add:
+        result["tags_result"] = _add_ghl_tags(contact_id, tags_to_add)
+
+    for note in notes:
+        result["note_added"] = _add_ghl_note(contact_id, note)
+
+    logging.info(f"📋 Validation complete for {contact_id}: {json.dumps(result, default=str)}")
+    return result
 
 
 @app.get("/health-check")
