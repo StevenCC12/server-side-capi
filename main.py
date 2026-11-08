@@ -639,14 +639,21 @@ async def webhook_new_contact(request: Request):
 
     logging.info(f"📥 NEW CONTACT WEBHOOK: {json.dumps(raw, default=str)[:500]}")
 
-    contact_id = raw.get("id") or raw.get("contactId") or (raw.get("contact") or {}).get("id")
-    if not contact_id:
-        raise HTTPException(status_code=400, detail="Missing contact ID")
-
+    # Workflow webhook sends flat snake_case fields; also handle camelCase / nested
     contact_data = raw.get("contact") or raw
-    first_name = contact_data.get("firstName") or contact_data.get("first_name") or ""
-    last_name = contact_data.get("lastName") or contact_data.get("last_name") or ""
+    first_name = contact_data.get("first_name") or contact_data.get("firstName") or ""
+    last_name = contact_data.get("last_name") or contact_data.get("lastName") or ""
     email = (contact_data.get("email") or "").strip().lower()
+
+    # Contact ID: try payload fields first, fall back to email lookup
+    contact_id = (raw.get("contact_id") or raw.get("contactId")
+                  or (raw.get("contact") or {}).get("id"))
+    if not contact_id and email:
+        looked_up = _lookup_ghl_contact(email=email)
+        if looked_up:
+            contact_id = looked_up.get("id")
+    if not contact_id:
+        raise HTTPException(status_code=400, detail="Missing contact ID and unable to look up by email")
 
     corrections: Dict[str, Any] = {}
     updates: Dict[str, str] = {}
