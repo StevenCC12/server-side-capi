@@ -684,7 +684,7 @@ async def webhook_new_contact(request: Request):
         if corrected_domain:
             corrections["emailDomain"] = {"from": email.rsplit("@", 1)[1], "to": corrected_domain}
             email = fixed_email
-            tags_to_add.append("email-domain-corrected")
+            tags_to_add.append("email-corrected")
 
         # 3. Email local part validation (uses corrected names for comparison)
         local_check = _check_email_local_part(email, first_name, last_name)
@@ -693,7 +693,8 @@ async def webhook_new_contact(request: Request):
         if local_check["action"] == "auto-correct":
             domain = email.rsplit("@", 1)[1]
             email = f"{local_check['suggested_local']}@{domain}"
-            tags_to_add.append("email-local-corrected")
+            if "email-corrected" not in tags_to_add:
+                tags_to_add.append("email-corrected")
 
         elif local_check["action"] == "flag":
             domain = email.rsplit("@", 1)[1]
