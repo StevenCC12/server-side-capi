@@ -58,6 +58,10 @@ GHL_LOCATIONS = [
 
 ROLLOVER_TAGS_TO_REMOVE = ["currently registered", "dragning"]
 
+# --- Pending Orders / Slack Config ---
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
+PENDING_SPREADSHEET_ID = "1UFM8sHEmf8VUdJNadHbx98gJtnoaVyGej-0fesx-U1Q"
+
 PURCHASE_DEFAULT_VALUE = 21997.00
 PURCHASE_DOWNSELL_VALUE = 4997.00
 PURCHASE_DEFAULT_URL = "https://checkout.knaa.se/order-page"
@@ -461,6 +465,94 @@ def _sync_contact_to_maria(first_name: str, last_name: str, email: str, phone: s
             return {"status": "partial", "contact_id": contact_id, "created": created, "tag_error": str(e)}
 
     return {"status": "synced", "contact_id": contact_id, "created": created}
+
+
+# --- Pending Orders Helpers ---
+
+def _send_slack_message(text: str, blocks: list = None):
+    """Send a message to Slack via incoming webhook."""
+    if not SLACK_WEBHOOK_URL:
+        logging.warning("SLACK_WEBHOOK_URL not configured — skipping notification")
+        return False
+    payload = {"text": text}
+    if blocks:
+        payload["blocks"] = blocks
+    try:
+        resp = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=10)
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        logging.error(f"Slack notification failed: {e}")
+        return False
+
+
+def _fetch_pending_knaa_orders(start_date: str = None, end_date: str = None) -> list:
+    """Fetch pending KNAA orders from GHL, deduplicated by contactId."""
+    all_orders = []
+    offset = 0
+    limit = 100
+    while True:
+        params = {
+            "altId": GHL_LOCATION_ID,
+            "altType": "location",
+            "status": "pending",
+            "limit": limit,
+            "offset": offset,
+        }
+        if start_date:
+            params["startAt"] = start_date
+        if end_date:
+            params["endAt"] = end_date
+        resp = requests.get(
+            f"{GHL_API_BASE}/payments/orders",
+            headers={"Authorization": f"Bearer {GHL_API_KEY}", "Version": "v3"},
+            params=params, timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        orders = data.get("data", [])
+        total = data.get("totalCount", 0)
+        all_orders.extend(orders)
+        if len(all_orders) >= total or not orders:
+            break
+        offset += limit
+        time.sleep(0.3)
+
+    knaa_orders = [o for o in all_orders if "KNAA" in o.get("sourceName", "")]
+
+    contacts = {}
+    for o in knaa_orders:
+        cid = o["contactId"]
+        if cid not in contacts:
+            contacts[cid] = {
+                "contactId": cid,
+                "name": o.get("contactName", ""),
+                "email": o.get("contactEmail", ""),
+                "first_pending": o["createdAt"],
+                "count": 0,
+                "amounts": [],
+            }
+        c = contacts[cid]
+        c["count"] += 1
+        c["amounts"].append(o.get("amount", 0))
+        if o["createdAt"] < c["first_pending"]:
+            c["first_pending"] = o["createdAt"]
+
+    result = sorted(contacts.values(), key=lambda x: x["count"], reverse=True)
+
+    for c in result:
+        try:
+            resp = requests.get(
+                f"{GHL_API_BASE}/contacts/{c['contactId']}",
+                headers=_ghl_headers(), timeout=15,
+            )
+            resp.raise_for_status()
+            c["phone"] = resp.json().get("contact", {}).get("phone", "")
+        except Exception:
+            c["phone"] = ""
+        time.sleep(0.2)
+
+    return result
 
 
 ATTRIBUTION_WINDOW_DAYS = 30
@@ -1063,6 +1155,50 @@ async def monthly_rollover(request: Request):
 
     logging.info(f"[ROLLOVER] Complete: {json.dumps(results, default=str)[:2000]}")
     return results
+
+
+@app.post("/pending-orders/scan")
+async def scan_pending_orders(request: Request):
+    """Scan for pending KNAA orders, update spreadsheet, notify Slack."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    start_date = body.get("start_date")
+    end_date = body.get("end_date")
+
+    logging.info(f"[PENDING SCAN] Starting scan (start={start_date}, end={end_date})")
+
+    contacts = _fetch_pending_knaa_orders(start_date=start_date, end_date=end_date)
+    logging.info(f"[PENDING SCAN] Found {len(contacts)} unique contacts with pending orders")
+
+    if contacts:
+        summary_lines = []
+        for c in contacts[:15]:
+            summary_lines.append(
+                f"• *{c['name']}* ({c['email']}) — {c['count']}x pending"
+            )
+        if len(contacts) > 15:
+            summary_lines.append(f"_...and {len(contacts) - 15} more_")
+
+        total_value = sum(sum(c["amounts"]) for c in contacts)
+        slack_text = (
+            f"📋 *KNAA Pending Orders Scan*\n"
+            f"*{len(contacts)}* unique contacts with pending orders\n"
+            f"Total pending value: *kr{total_value:,.0f}*\n\n"
+            + "\n".join(summary_lines)
+            + f"\n\n📊 <https://docs.google.com/spreadsheets/d/{PENDING_SPREADSHEET_ID}|Open spreadsheet>"
+        )
+        _send_slack_message(slack_text)
+    else:
+        _send_slack_message("✅ *KNAA Pending Orders Scan*\nNo pending orders found.")
+
+    return {
+        "status": "success",
+        "contacts": len(contacts),
+        "data": contacts,
+    }
 
 
 @app.get("/health-check")
