@@ -393,24 +393,19 @@ def _add_ghl_note(contact_id: str, body: str) -> bool:
         return False
 
 
-def _sync_contact_to_maria(first_name: str, last_name: str, email: str, phone: str = "") -> Dict[str, Any]:
-    """Sync a cleaned contact to Maria's CRM. Creates if not found, adds 'currently registered' tag."""
-    if not GHL_API_KEY_MARIA or not GHL_LOCATION_ID_MARIA:
-        logging.warning("Maria CRM credentials not configured — skipping sync")
-        return {"status": "skipped", "reason": "maria_credentials_not_set"}
+MARIA_HEADERS = {
+    "Authorization": f"Bearer {GHL_API_KEY_MARIA}",
+    "Version": "2021-07-28",
+    "Accept": "application/json",
+} if GHL_API_KEY_MARIA else {}
 
-    maria_headers = {
-        "Authorization": f"Bearer {GHL_API_KEY_MARIA}",
-        "Version": "2021-07-28",
-        "Accept": "application/json",
-    }
 
-    # 1. Search for existing contact by email
-    contact_id = None
+def _find_maria_contact(email: str) -> Optional[str]:
+    """Find a contact in Maria's CRM by email. Returns contact_id or None."""
     try:
         resp = requests.get(
             f"{GHL_API_BASE}/contacts/search/duplicate",
-            headers=maria_headers,
+            headers=MARIA_HEADERS,
             params={"locationId": GHL_LOCATION_ID_MARIA, "email": email},
             timeout=15,
         )
@@ -418,12 +413,21 @@ def _sync_contact_to_maria(first_name: str, last_name: str, email: str, phone: s
         existing = resp.json().get("contact")
         if existing:
             contact_id = existing.get("id")
-            logging.info(f"👥 Maria CRM: contact exists ({contact_id}) for {email}")
+            logging.info(f"👥 Maria CRM: found contact {contact_id} for {email}")
+            return contact_id
     except Exception as e:
         logging.error(f"❌ Maria CRM lookup failed for {email}: {e}")
-        return {"status": "error", "step": "lookup", "error": str(e)}
+    return None
 
-    # 2. Create contact if not found
+
+def _sync_contact_to_maria(first_name: str, last_name: str, email: str, phone: str = "") -> Dict[str, Any]:
+    """Sync a cleaned contact to Maria's CRM. Creates if not found, adds 'currently registered' tag."""
+    if not GHL_API_KEY_MARIA or not GHL_LOCATION_ID_MARIA:
+        logging.warning("Maria CRM credentials not configured — skipping sync")
+        return {"status": "skipped", "reason": "maria_credentials_not_set"}
+
+    contact_id = _find_maria_contact(email)
+
     created = False
     if not contact_id:
         try:
@@ -437,7 +441,7 @@ def _sync_contact_to_maria(first_name: str, last_name: str, email: str, phone: s
                 create_body["phone"] = phone
             resp = requests.post(
                 f"{GHL_API_BASE}/contacts/",
-                headers={**maria_headers, "Content-Type": "application/json"},
+                headers={**MARIA_HEADERS, "Content-Type": "application/json"},
                 json=create_body,
                 timeout=15,
             )
@@ -449,12 +453,11 @@ def _sync_contact_to_maria(first_name: str, last_name: str, email: str, phone: s
             logging.error(f"❌ Maria CRM contact creation failed for {email}: {e}")
             return {"status": "error", "step": "create", "error": str(e)}
 
-    # 3. Add "currently registered" tag to trigger Maria's workflow
     if contact_id:
         try:
             resp = requests.post(
                 f"{GHL_API_BASE}/contacts/{contact_id}/tags",
-                headers={**maria_headers, "Version": "v3", "Content-Type": "application/json"},
+                headers={**MARIA_HEADERS, "Version": "v3", "Content-Type": "application/json"},
                 json={"tags": ["currently registered"]},
                 timeout=15,
             )
@@ -465,6 +468,71 @@ def _sync_contact_to_maria(first_name: str, last_name: str, email: str, phone: s
             return {"status": "partial", "contact_id": contact_id, "created": created, "tag_error": str(e)}
 
     return {"status": "synced", "contact_id": contact_id, "created": created}
+
+
+def _sync_action_to_maria(email: str, action: str, tag: str = None) -> Dict[str, Any]:
+    """Execute a sync action on a contact in Maria's CRM."""
+    if not GHL_API_KEY_MARIA or not GHL_LOCATION_ID_MARIA:
+        logging.warning("Maria CRM credentials not configured — skipping sync")
+        return {"status": "skipped", "reason": "maria_credentials_not_set"}
+
+    contact_id = _find_maria_contact(email)
+    if not contact_id:
+        logging.info(f"⏭️ Maria CRM: no contact found for {email} — skipping {action}")
+        return {"status": "skipped", "reason": "contact_not_found"}
+
+    try:
+        if action == "add_tag":
+            if not tag:
+                return {"status": "error", "reason": "tag is required for add_tag"}
+            resp = requests.post(
+                f"{GHL_API_BASE}/contacts/{contact_id}/tags",
+                headers={**MARIA_HEADERS, "Version": "v3", "Content-Type": "application/json"},
+                json={"tags": [tag]},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            logging.info(f"🏷️ Maria sync: added tag '{tag}' to {contact_id} ({email})")
+
+        elif action == "remove_tag":
+            if not tag:
+                return {"status": "error", "reason": "tag is required for remove_tag"}
+            resp = requests.delete(
+                f"{GHL_API_BASE}/contacts/{contact_id}/tags",
+                headers={**MARIA_HEADERS, "Version": "v3", "Content-Type": "application/json"},
+                json={"tags": [tag]},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            logging.info(f"🏷️ Maria sync: removed tag '{tag}' from {contact_id} ({email})")
+
+        elif action == "set_email_dnd":
+            resp = requests.put(
+                f"{GHL_API_BASE}/contacts/{contact_id}",
+                headers={**MARIA_HEADERS, "Content-Type": "application/json"},
+                json={"dnd": True, "dndSettings": {"Email": {"status": "active", "message": "Synced from Carl CRM"}}},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            logging.info(f"🔇 Maria sync: Email DND enabled for {contact_id} ({email})")
+
+        elif action == "delete":
+            resp = requests.delete(
+                f"{GHL_API_BASE}/contacts/{contact_id}",
+                headers=MARIA_HEADERS,
+                timeout=15,
+            )
+            resp.raise_for_status()
+            logging.info(f"🗑️ Maria sync: deleted contact {contact_id} ({email})")
+
+        else:
+            return {"status": "error", "reason": f"Unknown action: {action}"}
+
+    except Exception as e:
+        logging.error(f"❌ Maria sync {action} failed for {contact_id} ({email}): {e}")
+        return {"status": "error", "action": action, "contact_id": contact_id, "error": str(e)}
+
+    return {"status": "synced", "action": action, "contact_id": contact_id}
 
 
 # --- Pending Orders Helpers ---
@@ -804,10 +872,14 @@ async def webhook_purchase(request: Request):
 
     try:
         result = await _process_single_event(payload, request, client_ip_override=client_ip)
-        return {"status": "success", "event_id": payload.event_id, "response": result}
     except HTTPException as e:
         logging.error(f"❌ PURCHASE FAILED: {e.detail}")
         return {"status": "error", "event_id": payload.event_id, "message": e.detail}
+
+    maria_dnd = _sync_action_to_maria(email=payload.user_data["email"], action="set_email_dnd")
+    logging.info(f"[PURCHASE] Maria DND sync: {maria_dnd}")
+
+    return {"status": "success", "event_id": payload.event_id, "response": result, "maria_dnd": maria_dnd}
 
 
 @app.post("/webhook/new-contact")
@@ -1199,6 +1271,30 @@ async def scan_pending_orders(request: Request):
         "contacts": len(contacts),
         "data": contacts,
     }
+
+
+@app.post("/webhook/sync-to-maria")
+async def webhook_sync_to_maria(request: Request):
+    """One-way sync from Carl's CRM to Maria's: tags, DND, deletion."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    email = (body.get("email") or "").strip().lower()
+    action = (body.get("action") or "").strip().lower()
+
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required")
+    if not action:
+        raise HTTPException(status_code=400, detail="action is required (add_tag, remove_tag, set_email_dnd, delete)")
+
+    tag = (body.get("tag") or "").strip() if action in ("add_tag", "remove_tag") else None
+
+    logging.info(f"[MARIA SYNC] {action} for {email}" + (f" tag='{tag}'" if tag else ""))
+    result = _sync_action_to_maria(email=email, action=action, tag=tag)
+    logging.info(f"[MARIA SYNC] Result: {json.dumps(result, default=str)}")
+    return result
 
 
 @app.get("/health-check")
