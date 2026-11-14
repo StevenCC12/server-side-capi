@@ -470,13 +470,14 @@ def _sync_contact_to_maria(first_name: str, last_name: str, email: str, phone: s
     return {"status": "synced", "contact_id": contact_id, "created": created}
 
 
-def _sync_action_to_maria(email: str, action: str, tag: str = None) -> Dict[str, Any]:
+def _sync_action_to_maria(email: str, action: str, tag: str = None, contact_id: str = None) -> Dict[str, Any]:
     """Execute a sync action on a contact in Maria's CRM."""
     if not GHL_API_KEY_MARIA or not GHL_LOCATION_ID_MARIA:
         logging.warning("Maria CRM credentials not configured — skipping sync")
         return {"status": "skipped", "reason": "maria_credentials_not_set"}
 
-    contact_id = _find_maria_contact(email)
+    if not contact_id:
+        contact_id = _find_maria_contact(email)
     if not contact_id:
         logging.info(f"⏭️ Maria CRM: no contact found for {email} — skipping {action}")
         return {"status": "skipped", "reason": "contact_not_found"}
@@ -876,10 +877,14 @@ async def webhook_purchase(request: Request):
         logging.error(f"❌ PURCHASE FAILED: {e.detail}")
         return {"status": "error", "event_id": payload.event_id, "message": e.detail}
 
-    maria_dnd = _sync_action_to_maria(email=payload.user_data["email"], action="set_email_dnd")
-    logging.info(f"[PURCHASE] Maria DND sync: {maria_dnd}")
+    purchase_email = payload.user_data["email"]
+    maria_contact_id = _find_maria_contact(purchase_email)
+    maria_dnd = _sync_action_to_maria(email=purchase_email, action="set_email_dnd", contact_id=maria_contact_id)
+    maria_tag = _sync_action_to_maria(email=purchase_email, action="add_tag", tag="purchased, do not contact", contact_id=maria_contact_id)
+    logging.info(f"[PURCHASE] Maria sync: dnd={maria_dnd['status']}, tag={maria_tag['status']}")
 
-    return {"status": "success", "event_id": payload.event_id, "response": result, "maria_dnd": maria_dnd}
+    return {"status": "success", "event_id": payload.event_id, "response": result,
+            "maria_dnd": maria_dnd, "maria_tag": maria_tag}
 
 
 @app.post("/webhook/new-contact")
