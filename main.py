@@ -1278,26 +1278,49 @@ async def scan_pending_orders(request: Request):
     }
 
 
-@app.post("/webhook/sync-to-maria")
-async def webhook_sync_to_maria(request: Request):
-    """One-way sync from Carl's CRM to Maria's: tags, DND, deletion."""
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
+def _extract_email_from_webhook(body: dict) -> str:
+    """Extract email from GHL's standard webhook payload."""
+    return (body.get("email")
+            or body.get("contact", {}).get("email", "")
+            or body.get("contact_email", "")
+            ).strip().lower()
 
-    email = (body.get("email") or "").strip().lower()
-    action = (body.get("action") or "").strip().lower()
 
+@app.post("/webhook/sync-to-maria/cant-attend")
+async def sync_maria_cant_attend(request: Request):
+    """Carl tag 'can't attend' → add same tag in Maria's CRM."""
+    body = await request.json()
+    email = _extract_email_from_webhook(body)
     if not email:
-        raise HTTPException(status_code=400, detail="email is required")
-    if not action:
-        raise HTTPException(status_code=400, detail="action is required (add_tag, remove_tag, set_email_dnd, delete)")
+        raise HTTPException(status_code=400, detail="No email found in payload")
+    logging.info(f"[MARIA SYNC] cant-attend for {email}")
+    result = _sync_action_to_maria(email=email, action="add_tag", tag="can't attend")
+    logging.info(f"[MARIA SYNC] Result: {json.dumps(result, default=str)}")
+    return result
 
-    tag = (body.get("tag") or "").strip() if action in ("add_tag", "remove_tag") else None
 
-    logging.info(f"[MARIA SYNC] {action} for {email}" + (f" tag='{tag}'" if tag else ""))
-    result = _sync_action_to_maria(email=email, action=action, tag=tag)
+@app.post("/webhook/sync-to-maria/email-dnd")
+async def sync_maria_email_dnd(request: Request):
+    """Carl Email DND enabled → set Email DND in Maria's CRM."""
+    body = await request.json()
+    email = _extract_email_from_webhook(body)
+    if not email:
+        raise HTTPException(status_code=400, detail="No email found in payload")
+    logging.info(f"[MARIA SYNC] email-dnd for {email}")
+    result = _sync_action_to_maria(email=email, action="set_email_dnd")
+    logging.info(f"[MARIA SYNC] Result: {json.dumps(result, default=str)}")
+    return result
+
+
+@app.post("/webhook/sync-to-maria/delete")
+async def sync_maria_delete(request: Request):
+    """Carl contact deleted → delete from Maria's CRM."""
+    body = await request.json()
+    email = _extract_email_from_webhook(body)
+    if not email:
+        raise HTTPException(status_code=400, detail="No email found in payload")
+    logging.info(f"[MARIA SYNC] delete for {email}")
+    result = _sync_action_to_maria(email=email, action="delete")
     logging.info(f"[MARIA SYNC] Result: {json.dumps(result, default=str)}")
     return result
 
