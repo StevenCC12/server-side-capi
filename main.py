@@ -56,7 +56,7 @@ GHL_LOCATIONS = [
     {"name": "maria", "location_id": GHL_LOCATION_ID_MARIA, "api_key": GHL_API_KEY_MARIA},
 ]
 
-ROLLOVER_TAGS_TO_REMOVE = ["currently registered", "dragning"]
+ROLLOVER_TAGS_TO_REMOVE = ["currently registered", "dragning", "new-lead", "returning"]
 
 # --- Pending Orders / Slack Config ---
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
@@ -454,15 +454,16 @@ def _sync_contact_to_maria(first_name: str, last_name: str, email: str, phone: s
             return {"status": "error", "step": "create", "error": str(e)}
 
     if contact_id:
+        segment_tag = "new-lead" if created else "returning"
         try:
             resp = requests.post(
                 f"{GHL_API_BASE}/contacts/{contact_id}/tags",
                 headers={**MARIA_HEADERS, "Version": "v3", "Content-Type": "application/json"},
-                json={"tags": ["currently registered"]},
+                json={"tags": ["currently registered", segment_tag]},
                 timeout=15,
             )
             resp.raise_for_status()
-            logging.info(f"🏷️ Maria CRM: tagged {contact_id} 'currently registered'")
+            logging.info(f"🏷️ Maria CRM: tagged {contact_id} 'currently registered' + '{segment_tag}'")
         except Exception as e:
             logging.error(f"❌ Maria CRM tag failed for {contact_id}: {e}")
             return {"status": "partial", "contact_id": contact_id, "created": created, "tag_error": str(e)}
