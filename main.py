@@ -899,9 +899,9 @@ async def webhook_new_contact(request: Request):
 
     # Workflow webhook sends flat snake_case fields; also handle camelCase / nested
     contact_data = raw.get("contact") or raw
-    first_name = contact_data.get("first_name") or contact_data.get("firstName") or ""
-    last_name = contact_data.get("last_name") or contact_data.get("lastName") or ""
-    email = (contact_data.get("email") or "").strip().lower()
+    first_name = contact_data.get("first_name") or contact_data.get("firstName") or raw.get("first_name") or raw.get("firstName") or ""
+    last_name = contact_data.get("last_name") or contact_data.get("lastName") or raw.get("last_name") or raw.get("lastName") or ""
+    email = (contact_data.get("email") or raw.get("email") or "").strip().lower()
 
     # Contact ID: try payload fields first, fall back to email lookup
     contact_id = (raw.get("contact_id") or raw.get("contactId")
@@ -998,8 +998,12 @@ async def webhook_new_contact(request: Request):
         result["note_added"] = _add_ghl_note(contact_id, note)
 
     # 5. Sync cleaned contact to Maria's CRM
-    phone = (contact_data.get("phone") or "").strip()
-    result["maria_sync"] = _sync_contact_to_maria(first_name, last_name, email, phone)
+    phone = (contact_data.get("phone") or raw.get("phone") or "").strip()
+    if email:
+        result["maria_sync"] = _sync_contact_to_maria(first_name, last_name, email, phone)
+    else:
+        logging.warning(f"⚠️ Skipping Maria sync for {contact_id}: no email in payload")
+        result["maria_sync"] = {"status": "skipped", "reason": "no_email"}
 
     logging.info(f"📋 Validation complete for {contact_id}: {json.dumps(result, default=str)}")
     return result
