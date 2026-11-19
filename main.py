@@ -58,6 +58,11 @@ GHL_LOCATIONS = [
 
 ROLLOVER_TAGS_TO_REMOVE = ["currently registered", "dragning", "new-lead", "returning"]
 
+# --- Wallet Balance Monitor ---
+WALLET_LOW_THRESHOLD = float(os.getenv("WALLET_LOW_THRESHOLD", "100"))
+_last_wallet_alert_time = 0.0
+WALLET_ALERT_COOLDOWN = 6 * 3600
+
 # --- Pending Orders / Slack Config ---
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 PENDING_SPREADSHEET_ID = "1UFM8sHEmf8VUdJNadHbx98gJtnoaVyGej-0fesx-U1Q"
@@ -888,6 +893,35 @@ async def webhook_purchase(request: Request):
             "maria_dnd": maria_dnd, "maria_tag": maria_tag}
 
 
+def _check_wallet_and_notify():
+    global _last_wallet_alert_time
+    if not SLACK_WEBHOOK_URL:
+        return
+    if time.time() - _last_wallet_alert_time < WALLET_ALERT_COOLDOWN:
+        return
+    try:
+        resp = requests.get(
+            f"{GHL_API_BASE}/wallet/balance",
+            params={"locationId": GHL_LOCATION_ID},
+            headers={"Authorization": f"Bearer {GHL_API_KEY}", "Version": "v3",
+                     "Accept": "application/json"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        balance = resp.json().get("data", {}).get("balance", 0)
+        if balance >= WALLET_LOW_THRESHOLD:
+            return
+        _last_wallet_alert_time = time.time()
+        requests.post(SLACK_WEBHOOK_URL, json={
+            "text": (f"⚠️ GHL wallet balance is *${balance:.2f}* "
+                     f"(threshold: ${WALLET_LOW_THRESHOLD:.0f}). "
+                     f"Top up to avoid SMS/email failures.")
+        }, timeout=10)
+        logging.info(f"💰 Wallet alert sent: ${balance:.2f}")
+    except Exception as e:
+        logging.warning(f"Wallet check failed: {e}")
+
+
 @app.post("/webhook/new-contact")
 async def webhook_new_contact(request: Request):
     """GHL ContactCreate webhook → validate names and email, update contact."""
@@ -1005,6 +1039,8 @@ async def webhook_new_contact(request: Request):
     else:
         logging.warning(f"⚠️ Skipping Maria sync for {contact_id}: no email in payload")
         result["maria_sync"] = {"status": "skipped", "reason": "no_email"}
+
+    _check_wallet_and_notify()
 
     logging.info(f"📋 Validation complete for {contact_id}: {json.dumps(result, default=str)}")
     return result
