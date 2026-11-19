@@ -56,7 +56,7 @@ GHL_LOCATIONS = [
     {"name": "maria", "location_id": GHL_LOCATION_ID_MARIA, "api_key": GHL_API_KEY_MARIA},
 ]
 
-ROLLOVER_TAGS_TO_REMOVE = ["currently registered", "dragning", "new-lead", "returning"]
+ROLLOVER_TAGS_TO_REMOVE = ["currently registered", "dragning", "new-lead", "returning", "email-corrected"]
 
 # --- Wallet Balance Monitor ---
 WALLET_LOW_THRESHOLD = float(os.getenv("WALLET_LOW_THRESHOLD", "100"))
