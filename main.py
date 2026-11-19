@@ -332,9 +332,6 @@ def _check_email_local_part(email: str, first_name: str, last_name: str) -> dict
     if best_dist == 1:
         return {"action": "auto-correct", "suggested_local": best_pattern,
                 "details": f"'{local}' → '{best_pattern}' (distance=1)"}
-    if best_dist == 2:
-        return {"action": "flag", "suggested_local": best_pattern,
-                "details": f"'{local}' → '{best_pattern}'? (distance=2)"}
 
     return {"action": "ok"}
 
@@ -995,19 +992,6 @@ async def webhook_new_contact(request: Request):
             if "email-corrected" not in tags_to_add:
                 tags_to_add.append("email-corrected")
             logging.info(f"[CORRECTION] LOCAL {contact_id}: {original_local} → {local_check['suggested_local']} ({local_check.get('details', '')})")
-
-        elif local_check["action"] == "flag":
-            domain = email.rsplit("@", 1)[1]
-            suggested = f"{local_check['suggested_local']}@{domain}"
-            tags_to_add.append("email-review-needed")
-            logging.info(f"[CORRECTION] FLAGGED {contact_id}: {email} — suggested {suggested} ({local_check.get('details', '')})")
-            notes.append(
-                f"⚠️ Possible email typo detected:\n"
-                f"Current: {email}\n"
-                f"Suggested: {suggested}\n"
-                f"Details: {local_check['details']}\n"
-                f"Contact: {first_name} {last_name}"
-            )
 
         if email != (contact_data.get("email") or "").strip().lower():
             updates["email"] = email
