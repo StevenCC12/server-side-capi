@@ -10,6 +10,7 @@ import re
 import json
 import ipaddress
 import time
+import unicodedata
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any
 
@@ -980,6 +981,19 @@ async def webhook_new_contact(request: Request):
             email = fixed_email
             tags_to_add.append("email-corrected")
             logging.info(f"[CORRECTION] DOMAIN {contact_id}: {original_domain} → {corrected_domain}")
+
+        # 2b. Strip diacritics from local part (ö→o, å→a, ä→a, etc.)
+        local, at, domain = email.rpartition("@")
+        ascii_local = "".join(
+            c for c in unicodedata.normalize("NFD", local)
+            if unicodedata.category(c) != "Mn"
+        )
+        if ascii_local != local:
+            corrections["emailDiacritics"] = {"from": local, "to": ascii_local}
+            email = f"{ascii_local}@{domain}"
+            if "email-corrected" not in tags_to_add:
+                tags_to_add.append("email-corrected")
+            logging.info(f"[CORRECTION] DIACRITICS {contact_id}: {local} → {ascii_local}")
 
         # 3. Email local part validation (uses corrected names for comparison)
         local_check = _check_email_local_part(email, first_name, last_name)
