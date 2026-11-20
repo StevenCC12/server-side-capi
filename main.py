@@ -310,8 +310,8 @@ def _check_email_local_part(email: str, first_name: str, last_name: str) -> dict
         return {"action": "ok"}
 
     local = email.rsplit("@", 1)[0].lower().strip()
-    fn = first_name.lower().strip()
-    ln = last_name.lower().strip()
+    fn = "".join(c for c in unicodedata.normalize("NFD", first_name.lower().strip()) if unicodedata.category(c) != "Mn")
+    ln = "".join(c for c in unicodedata.normalize("NFD", last_name.lower().strip()) if unicodedata.category(c) != "Mn")
 
     if len(fn) < 2 or len(ln) < 2 or len(local) < 2:
         return {"action": "ok"}
